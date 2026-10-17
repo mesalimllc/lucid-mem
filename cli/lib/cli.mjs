@@ -11,6 +11,7 @@ import {
 import { cmdDream } from './dream.mjs';
 import { cmdHarvest } from './harvest.mjs';
 import { cmdDoctor, cmdInstall } from './install.mjs';
+import { cmdServe } from './serve.mjs';
 
 const USAGE = `amr — agent memory repo CLI
 
@@ -27,7 +28,8 @@ usage: amr <command> [args] [flags]
   doctor                        check repo, PATH, and per-host wiring
   dream [--days N] [--fix] [--json]   report memory health; --fix applies mechanical cleanup
   harvest [--days N] [--json]   list recent session transcripts across agent hosts
-  install [--host a,b|all]      wire hooks + rules into detected agent hosts
+  install [--host a,b|all]      wire hooks + rules + MCP into detected agent hosts
+  serve                         stdio MCP server (memory_context/add/search/update)
 
 flags:
   --project                     scope the entry to the current git repo
@@ -92,6 +94,8 @@ export function main(argv) {
       }
       case 'index':
         return cmdIndex();
+      case 'serve':
+        return cmdServe();
       case 'remote':
         return cmdRemote(pos);
       case 'sync':

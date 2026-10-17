@@ -49,6 +49,7 @@ const HOSTS = {
   cursor: {
     detect: () => fs.existsSync(path.join(home, '.cursor')),
     hooksJson: () => path.join(home, '.cursor', 'hooks.json'),
+    mcpJson: () => path.join(home, '.cursor', 'mcp.json'),
     rules: () => [
       {
         path: path.join(home, '.cursor', 'rules', 'agent-memory-repo.mdc'),
@@ -60,6 +61,7 @@ const HOSTS = {
   claude: {
     detect: () => fs.existsSync(path.join(home, '.claude')),
     settingsJson: () => path.join(home, '.claude', 'settings.json'),
+    mcpJson: () => path.join(home, '.claude.json'),
     rules: () => [
       {
         path: path.join(home, '.claude', 'CLAUDE.md'),
@@ -68,10 +70,18 @@ const HOSTS = {
       },
     ],
   },
+  'claude-desktop': {
+    // Desktop app: no hooks/rules file — MCP tools are the only channel.
+    detect: () => fs.existsSync(path.join(appdata, 'Claude')),
+    mcpJson: () =>
+      path.join(appdata, 'Claude', 'claude_desktop_config.json'),
+  },
   windsurf: {
     detect: () => fs.existsSync(path.join(home, '.codeium', 'windsurf')),
     hooksJson: () =>
       path.join(home, '.codeium', 'windsurf', 'hooks.json'),
+    mcpJson: () =>
+      path.join(home, '.codeium', 'windsurf', 'mcp_config.json'),
     rules: () => [
       {
         path: path.join(
@@ -118,6 +128,7 @@ const HOSTS = {
     // No session-start hook: config.toml `notify` is fire-and-forget,
     // single-slot, and can't inject context. AGENTS.md block only.
     detect: () => fs.existsSync(path.join(home, '.codex')),
+    mcpToml: () => path.join(home, '.codex', 'config.toml'),
     rules: () => [
       {
         path: path.join(home, '.codex', 'AGENTS.md'),
@@ -131,6 +142,7 @@ const HOSTS = {
     // CLI data dir. Cline hooks are named executables in .clinerules/hooks
     // — unverified for global scope, so rules-only for now.
     detect: () => fs.existsSync(path.join(home, '.cline')),
+    mcpJson: () => path.join(home, '.cline', 'mcp.json'),
     rules: () => [
       {
         path: path.join(
@@ -162,6 +174,37 @@ const HOSTS = {
     ],
   },
 };
+
+const MCP_ENTRY = { command: 'node', args: [CLI_ENTRY, 'serve'] };
+
+function mergeMcpJson(file) {
+  let cfg = {};
+  if (fs.existsSync(file)) {
+    try {
+      cfg = JSON.parse(fs.readFileSync(file, 'utf8'));
+    } catch {
+      cfg = {};
+    }
+  }
+  if (cfg.mcpServers?.['agent-memory']) return false;
+  cfg.mcpServers = { ...(cfg.mcpServers || {}), 'agent-memory': MCP_ENTRY };
+  backup(file);
+  fs.mkdirSync(path.dirname(file), { recursive: true });
+  fs.writeFileSync(file, JSON.stringify(cfg, null, 2) + '\n');
+  return true;
+}
+
+function mergeMcpToml(file) {
+  const text = fs.existsSync(file) ? fs.readFileSync(file, 'utf8') : '';
+  if (text.includes('mcp_servers.agent-memory')) return false;
+  backup(file);
+  fs.mkdirSync(path.dirname(file), { recursive: true });
+  fs.writeFileSync(
+    file,
+    `${text}\n[mcp_servers.agent-memory]\ncommand = "node"\nargs = ["${CLI_ENTRY.replace(/\\/g, '\\\\')}", "serve"]\n`
+  );
+  return true;
+}
 
 function backup(file) {
   if (!fs.existsSync(file)) return;
@@ -318,6 +361,22 @@ export function cmdInstall(flags) {
           did.push(`rules ${res}: ${r.path}`);
         }
       }
+      if (h.mcpJson) {
+        const file = h.mcpJson();
+        did.push(
+          mergeMcpJson(file)
+            ? `mcp +agent-memory in ${file}`
+            : `mcp already wired in ${file}`
+        );
+      }
+      if (h.mcpToml) {
+        const file = h.mcpToml();
+        did.push(
+          mergeMcpToml(file)
+            ? `mcp +agent-memory in ${file}`
+            : `mcp already wired in ${file}`
+        );
+      }
     } catch (e) {
       err(`${name}: ${e.message}`);
       continue;
@@ -338,6 +397,10 @@ function hostWired(name) {
     if (h.settingsJson && has(h.settingsJson(), 'amr')) return 'wired';
     if (h.rules && h.rules().some((r) => has(r.path, MARK_BEGIN)))
       return 'wired (rules only)';
+    if (h.mcpJson && has(h.mcpJson(), 'agent-memory'))
+      return 'wired (mcp only)';
+    if (h.mcpToml && has(h.mcpToml(), 'agent-memory'))
+      return 'wired (mcp only)';
   } catch {}
   return 'not wired';
 }

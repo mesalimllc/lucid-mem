@@ -90,6 +90,12 @@ hook must never break or hang a session. Repo location: `$AMR_HOME`, default
 | Codex CLI | `~/.codex/AGENTS.md` block (no injectable hook; `notify` is fire-and-forget) | same block | — |
 | Cline | `~/Documents/Cline/Rules/agent-memory-repo.md` + `~/.cline/AGENTS.md` block (global hooks unverified) | same blocks | — |
 | Muse (muse-code) | `~/AppData/Local/hermes/SOUL.md` block | same block | — |
+| Claude Desktop | `amr serve` MCP tools via `claude_desktop_config.json` | same | — |
+
+MCP tier: `amr serve` is a stdio MCP server (`memory_context`/`memory_add`/`memory_search`/`memory_update`).
+Hosts spawn it per session — no daemon. Registered via `mcpServers` merge for cursor, claude, claude-desktop,
+windsurf, cline (`*.json`) and codex (`config.toml` `[mcp_servers.agent-memory]`). MCP is additive —
+hooks/rules stay primary where they exist; for Claude Desktop it is the only channel.
 
 Hook commands use absolute `node "<cli>/amr.mjs"` paths — immune to PATH issues.
 Rule block references `amr` and notes the absolute fallback. Shared canonical block
