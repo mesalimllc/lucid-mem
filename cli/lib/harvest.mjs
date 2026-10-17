@@ -1,6 +1,7 @@
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
+import { numFlag } from './core.mjs';
 
 const out = (s = '') => process.stdout.write(s + '\n');
 
@@ -260,7 +261,7 @@ export function extractMessages(found, { max = 200, min = 15 } = {}) {
 }
 
 export function cmdHarvest(flags) {
-  const days = parseInt(flags.days ?? '7', 10);
+  const days = numFlag(flags.days ?? '7', 7);
   const since = flags.since
     ? new Date(flags.since).getTime()
     : Date.now() - days * 864e5;
@@ -269,8 +270,8 @@ export function cmdHarvest(flags) {
   // --extract: normalize each file to its user-message stream.
   // Bounded: --max messages total (default 200), 500 chars each.
   if (flags.extract) {
-    const max = parseInt(flags.max || '200', 10);
-    const min = parseInt(flags.min || '15', 10);
+    const max = numFlag(flags.max || '200', 200);
+    const min = numFlag(flags.min || '15', 15);
     const msgs = extractMessages(found, { max, min });
     if (flags.json) return out(JSON.stringify(msgs, null, 2));
     for (const m of msgs)

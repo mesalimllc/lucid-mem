@@ -4,6 +4,7 @@ import {
   commit,
   ensureRepo,
   git,
+  numFlag,
   withLock,
 } from './core.mjs';
 
@@ -196,11 +197,11 @@ export function cmdDream(flags) {
     return;
   }
   const home = ensureRepo();
-  const staleDays = parseInt(flags.days ?? '90', 10);
+  const staleDays = numFlag(flags.days ?? '90', 90);
 
   // --if-stale N: run only when the last dream is older than N days
   if (flags['if-stale'] !== undefined) {
-    const minAge = parseInt(flags['if-stale'] || '7', 10);
+    const minAge = numFlag(flags['if-stale'] || '7', 7);
     const ageDays = (Date.now() - lastDreamAt(home)) / 864e5;
     if (ageDays < minAge) return; // recently dreamt; stay quiet (hook-safe)
   }
@@ -316,7 +317,7 @@ export function cmdDream(flags) {
   // files never exceed what `amr context` injects. Archive files stay
   // searchable via `amr search`; they are not session-injected.
   if (flags.compact) {
-    const keep = parseInt(flags.keep || '25', 10);
+    const keep = numFlag(flags.keep || '25', 25);
     const pdir = path.join(home, 'projects');
     const targets = [
       'MEMORY.md',

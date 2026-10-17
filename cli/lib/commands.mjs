@@ -74,7 +74,9 @@ export function cmdContext(flags) {
 
   // Attach list: the current project, then its config links
   // (transitive, deduped, max 5 total) and any --also names.
-  // private projects only ever load as the current project.
+  // private blocks reachability from repos that never linked it:
+  // direct links (siblings) and explicit --also attach fine; it only
+  // refuses when reached transitively through another project's links.
   const bySlug = new Map(listProjects(home).map((p) => [p.slug, p]));
   const attach = [];
   const seen = new Set();
@@ -84,17 +86,33 @@ export function cmdContext(flags) {
     attach.push({ slug, name: bySlug.get(slug)?.name || slug, linked });
   };
   if (proj) push(proj.slug, false);
-  const queue = [...(entry?.links || [])];
-  if (flags.also) queue.push(...String(flags.also).split(','));
+  const queue = (entry?.links || []).map((k) => ({ k, via: 'entry' }));
+  if (flags.also)
+    queue.push(
+      ...String(flags.also)
+        .split(',')
+        .map((k) => ({ k, via: 'also' }))
+    );
+  const refused = [];
+  const unknown = [];
   while (queue.length && attach.length < 5) {
-    const key = String(queue.shift()).trim().toLowerCase();
+    const { k: raw, via } = queue.shift();
+    const key = String(raw).trim().toLowerCase();
     if (!key) continue;
     const slug = resolveProjectSlug(home, key);
-    if (!slug || seen.has(slug)) continue;
+    if (!slug) {
+      unknown.push(key);
+      continue;
+    }
+    if (seen.has(slug)) continue;
     const e = projectEntry(cfg, { slug, name: key });
-    if (e?.private) continue;
+    if (e?.private && via === 'transitive') {
+      refused.push(key);
+      continue;
+    }
     push(slug, true);
-    if (e?.links) queue.push(...e.links);
+    if (e?.links)
+      queue.push(...e.links.map((l) => ({ k: l, via: 'transitive' })));
   }
 
   const lines = [`<agent-memory repo="${home}">`];
@@ -110,6 +128,16 @@ export function cmdContext(flags) {
     if (body) lines.push(body);
   }
   if (indexLinks.length) lines.push('', '## Index', indexLinks.join('\n'));
+  if (refused.length)
+    lines.push(
+      '',
+      `<!-- ${refused.length} linked project(s) omitted by private policy: ${refused.join(', ')} -->`
+    );
+  if (unknown.length)
+    lines.push(
+      '',
+      `<!-- ${unknown.length} linked project name(s) unresolved (no memory file): ${unknown.join(', ')} -->`
+    );
   // Recall pointer: archive/ holds compacted (oldest) entries —
   // searchable but never session-injected.
   const adir = path.join(home, 'archive');

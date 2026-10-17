@@ -94,6 +94,12 @@ export function sanitizeFile(input) {
 
 export const today = () => new Date().toISOString().slice(0, 10);
 
+// Numeric flag with fallback — bad input gets the default, never NaN.
+export const numFlag = (v, dflt) => {
+  const n = parseInt(v, 10);
+  return Number.isFinite(n) ? n : dflt;
+};
+
 const SECRET_PATTERNS = [
   /sk-[A-Za-z0-9_-]{16,}/,
   /ghp_[A-Za-z0-9]{20,}/,

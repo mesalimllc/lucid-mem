@@ -7,6 +7,7 @@ import {
   projectFor,
   loadConfig,
   resolveProjectSlug,
+  numFlag,
   git,
 } from './core.mjs';
 import { collectSessions, extractMessages } from './harvest.mjs';
@@ -97,9 +98,9 @@ const orgOf = (remote) => {
 export function cmdDiscover(flags) {
   const home = ensureRepo(resolveHome());
   const cfg = loadConfig(home);
-  const days = parseInt(flags.days ?? '90', 10);
-  const maxMsgs = parseInt(flags.max || '400', 10);
-  const minHits = parseInt(flags.min || '1', 10);
+  const days = numFlag(flags.days ?? '90', 90);
+  const maxMsgs = numFlag(flags.max || '400', 400);
+  const minHits = numFlag(flags.min || '1', 1);
   const roots = cfg.scanRoots?.length ? cfg.scanRoots : DEFAULT_ROOTS();
 
   const since = Date.now() - days * 864e5;

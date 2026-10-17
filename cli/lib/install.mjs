@@ -2,7 +2,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { ensureRepo, git, hasRemote, isMemoryRepo, resolveHome, sh } from './core.mjs';
+import { ensureRepo, git, hasRemote, isMemoryRepo, loadConfig, resolveHome, resolveProjectSlug, sh } from './core.mjs';
 
 const out = (s = '') => process.stdout.write(s + '\n');
 const err = (s) => process.stderr.write(s + '\n');
@@ -348,6 +348,16 @@ export function cmdInstall(flags) {
         : HOSTS[n].detect()
   );
   if (!names.length) {
+    if (requested && !requested.includes('all')) {
+      const bad = requested.filter((r) => !Object.keys(HOSTS).includes(r));
+      if (bad.length) {
+        process.stderr.write(
+          `unknown host(s): ${bad.join(', ')} (known: ${Object.keys(HOSTS).join(', ')})\n`
+        );
+        process.exitCode = 1;
+        return;
+      }
+    }
     out('no known agent hosts detected; use --host <name> to force');
     return;
   }
@@ -434,6 +444,17 @@ export function cmdDoctor() {
     const dirty = git(homeDir, ['status', '--porcelain']);
     out(`worktree    : ${dirty.stdout ? 'DIRTY — uncommitted changes present' : 'clean'}`);
     out(`remote      : ${hasRemote(homeDir) ? git(homeDir, ['remote', 'get-url', 'origin']).stdout : 'none (local only)'}`);
+    // amr.json keys that resolve to no project file are dead config —
+    // usually a mistyped repo name from link/policy.
+    const cfg = loadConfig(homeDir);
+    const dead = [];
+    for (const [k, e] of Object.entries(cfg.projects || {})) {
+      if (!resolveProjectSlug(homeDir, k)) dead.push(k);
+      for (const l of e.links || [])
+        if (!resolveProjectSlug(homeDir, l)) dead.push(`${k} -> ${l}`);
+    }
+    if (dead.length)
+      out(`config      : ${dead.length} unresolvable project key(s): ${dead.join(', ')}`);
   }
   const onPath =
     sh('where', ['amr']).code === 0 || sh('which', ['amr']).code === 0;
