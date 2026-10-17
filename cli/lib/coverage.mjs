@@ -74,7 +74,7 @@ const corpusText = (home) => {
       if (e.name === '.git') continue;
       const p = path.join(dir, e.name);
       if (e.isDirectory()) walk(p);
-      else if (e.name.endsWith('.md'))
+      else if (e.name.endsWith('.md') && e.name !== 'pending-saves.md')
         parts.push(normWords(fs.readFileSync(p, 'utf8')).join(' '));
     }
   })(home);
@@ -126,6 +126,28 @@ export function cmdCoverage(flags) {
   const missed = durable.filter((d) => !d.covered);
   const rate = durable.length ? Math.round((hits / durable.length) * 100) : null;
 
+  // The queue the next session reviews: misses become candidates in
+  // `amr context`, drain when saved, and age out with the window.
+  // Rewritten every run; excluded from the corpus so it can't
+  // self-cover.
+  const pending = path.join(home, 'dreams', 'pending-saves.md');
+  withLock(home, () => {
+    fs.mkdirSync(path.dirname(pending), { recursive: true });
+    if (missed.length) {
+      const body = [
+        '# Pending memory candidates',
+        '',
+        'Durable-sounding user statements not found in memory.',
+        'Review: `amr add` the real ones; ignore the rest.',
+        '',
+        ...missed
+          .slice(0, 15)
+          .map((m) => `- [${m.host}] ${m.mtime.slice(0, 10)} ${m.text}`),
+      ].join('\n');
+      fs.writeFileSync(pending, body + '\n');
+    } else fs.rmSync(pending, { force: true });
+  });
+
   if (flags.json)
     return out(
       JSON.stringify(
@@ -175,7 +197,9 @@ export function cmdCoverage(flags) {
     withLock(home, () => {
       fs.mkdirSync(path.dirname(log), { recursive: true });
       fs.appendFileSync(log, JSON.stringify(entry) + '\n');
-      commit(home, ['dreams/coverage.jsonl'], `Coverage ${rate}% (${hits}/${durable.length})`);
+      const files = ['dreams/coverage.jsonl'];
+      if (fs.existsSync(pending)) files.push('dreams/pending-saves.md');
+      commit(home, files, `Coverage ${rate}% (${hits}/${durable.length})`);
     });
   }
 }

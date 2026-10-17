@@ -158,6 +158,19 @@ export function cmdContext(flags) {
     if (recent.length)
       lines.push('', '## Recent project memory', recent.join('\n'));
   }
+  // Unsaved-signal queue from the last `amr coverage` run: durable
+  // statements that were never saved. Same surface in both modes; the
+  // next session reviews and saves the real ones.
+  const pending = path.join(home, 'dreams', 'pending-saves.md');
+  if (fs.existsSync(pending)) {
+    const items = bullets(fs.readFileSync(pending, 'utf8')).slice(0, 8);
+    if (items.length)
+      lines.push(
+        '',
+        '## Pending memory candidates (unsaved — review, `amr add` the real ones)',
+        items.join('\n')
+      );
+  }
   if (indexLinks.length) lines.push('', '## Index', indexLinks.join('\n'));
   if (unknown.length)
     lines.push(

@@ -2,7 +2,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import path from 'node:path';
-import { run, tmpdir } from './helpers.mjs';
+import { read, run, tmpdir } from './helpers.mjs';
 
 function setup() {
   const amrHome = tmpdir();
@@ -46,6 +46,36 @@ test('coverage reports save rate and lists missed durable signals', () => {
   assert.match(r.stdout, /1\/2 durable signals covered — save rate 50%/);
   assert.match(r.stdout, /cache TTL should always be 300/);
   assert.ok(!r.stdout.includes('never skip this check'));
+
+  // Misses land in the pending queue the next session reviews.
+  const pending = path.join(amrHome, 'dreams', 'pending-saves.md');
+  assert.match(read(pending), /cache TTL should always be 300/);
+
+  // The queue must not self-cover: the same miss stays a miss.
+  const r2 = run(['coverage', '--days', '7', '--no-log'], {
+    amrHome,
+    fakeHome,
+  });
+  assert.match(r2.stdout, /save rate 50%/);
+
+  // And it surfaces in context for both modes (outside-mode here).
+  const ctx = run(['context'], { amrHome, fakeHome, cwd: fakeHome });
+  assert.match(ctx.stdout, /Pending memory candidates/);
+  assert.match(ctx.stdout, /cache TTL/);
+});
+
+test('pending queue drains once a missed signal is saved', () => {
+  const { amrHome, fakeHome } = setup();
+  claudeJsonl(fakeHome, ['we decided the db migration runs weekly']);
+  run(['coverage', '--no-log'], { amrHome, fakeHome });
+  const pending = path.join(amrHome, 'dreams', 'pending-saves.md');
+  assert.ok(fs.existsSync(pending));
+
+  run(['add', 'db migration runs weekly'], { amrHome, fakeHome });
+  const r = run(['coverage', '--no-log'], { amrHome, fakeHome });
+  assert.equal(r.status, 0, r.stderr);
+  assert.match(r.stdout, /1\/1 .*100%/);
+  assert.ok(!fs.existsSync(pending));
 });
 
 test('coverage logs a trend line by default; --no-log skips it', () => {
