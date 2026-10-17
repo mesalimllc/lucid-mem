@@ -60,6 +60,21 @@ const SOURCES = [
     roots: [path.join(home, '.cursor', 'chats')],
     ext: ['.json', '.jsonl', '.md', ''],
   },
+  {
+    host: 'commandcode',
+    roots: [path.join(home, '.commandcode', 'projects')],
+    ext: ['.jsonl', '.json'],
+  },
+  {
+    host: 'freebuff',
+    // Shared codebuff-family session dir (codebuff/manicode/freebuff
+    // all log chats here); ~/.freebuff/worktrees has no transcripts.
+    roots: [
+      path.join(home, '.config', 'manicode', 'projects'),
+      path.join(home, '.freebuff', 'worktrees'),
+    ],
+    ext: ['.jsonl', '.json'],
+  },
 ];
 
 const MAX_PER_HOST = 100;
@@ -98,7 +113,7 @@ const isJsonBlob = (t) => {
 const isNoise = (t) =>
   !t ||
   isJsonBlob(t) ||
-  /^(\[object Object\],?)+$/.test(t) ||
+  /^(\[object Object\][,\s]*)+$/.test(t) ||
   /^<[a-z_][a-z0-9_-]*[\s>]/.test(t) ||
   /^Title: .*URL: https?:/s.test(t) ||
   /^(# AGENTS\.md|<INSTRUCTIONS>|<environment_context|<command-|<local-command|<system-reminder|Caveat:|This session is being continued)/.test(

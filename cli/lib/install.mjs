@@ -216,11 +216,50 @@ const HOSTS = {
       },
     ],
   },
+  commandcode: {
+    // Claude-Code-shaped CLI (projects/<slug>/<uuid>.jsonl sessions,
+    // mcp.json with mcpServers). Entries there use explicit
+    // "transport" fields, so tag the entry accordingly.
+    detect: () => fs.existsSync(path.join(home, '.commandcode')),
+    mcpJson: () => path.join(home, '.commandcode', 'mcp.json'),
+    mcpEntry: { transport: 'stdio', command: 'node', args: [CLI_ENTRY, 'serve'], enabled: true },
+    rules: () => [
+      {
+        path: path.join(home, '.commandcode', 'AGENTS.md'),
+        content: RULE_BLOCK,
+        append: true,
+      },
+    ],
+  },
+  freebuff: {
+    // Free codebuff CLI. Its ~/.freebuff/mcp.json is a manifest-managed
+    // server registry (hash-keyed, approvedManifest) — not safe to
+    // hand-edit, so rules-only. Sessions live in the shared codebuff
+    // dir (~/.config/manicode/projects/*/chats/*/log.jsonl), which
+    // harvest already reaches.
+    detect: () =>
+      !!firstExisting([
+        path.join(home, '.freebuff'),
+        path.join(home, '.config', 'manicode', 'freebuff.exe'),
+      ]),
+    rules: () => [
+      {
+        path: path.join(home, '.freebuff', 'AGENTS.md'),
+        content: RULE_BLOCK,
+        append: true,
+      },
+      {
+        path: path.join(home, '.config', 'manicode', 'AGENTS.md'),
+        content: RULE_BLOCK,
+        append: true,
+      },
+    ],
+  },
 };
 
 const MCP_ENTRY = { command: 'node', args: [CLI_ENTRY, 'serve'] };
 
-function mergeMcpJson(file) {
+function mergeMcpJson(file, entry = MCP_ENTRY) {
   let cfg = {};
   if (fs.existsSync(file)) {
     try {
@@ -230,7 +269,7 @@ function mergeMcpJson(file) {
     }
   }
   if (cfg.mcpServers?.['agent-memory']) return false;
-  cfg.mcpServers = { ...(cfg.mcpServers || {}), 'agent-memory': MCP_ENTRY };
+  cfg.mcpServers = { ...(cfg.mcpServers || {}), 'agent-memory': entry };
   backup(file);
   fs.mkdirSync(path.dirname(file), { recursive: true });
   fs.writeFileSync(file, JSON.stringify(cfg, null, 2) + '\n');
@@ -467,7 +506,7 @@ export function cmdInstall(flags) {
       if (h.mcpJson) {
         const file = h.mcpJson();
         did.push(
-          mergeMcpJson(file)
+          mergeMcpJson(file, h.mcpEntry)
             ? `mcp +agent-memory in ${file}`
             : `mcp already wired in ${file}`
         );
