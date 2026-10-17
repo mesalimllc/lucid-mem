@@ -1,0 +1,116 @@
+import {
+  cmdAdd,
+  cmdContext,
+  cmdEnsure,
+  cmdIndex,
+  cmdRemote,
+  cmdSearch,
+  cmdSync,
+  cmdUpdate,
+} from './commands.mjs';
+import { cmdDoctor, cmdInstall } from './install.mjs';
+
+const USAGE = `amr — agent memory repo CLI
+
+usage: amr <command> [args] [flags]
+
+  ensure                        create/verify the memory repo ($AMR_HOME, default ~/agent-memory)
+  context [dir]                 print session memory digest (global + current project)
+  add "text"                    save a memory entry
+  update "match" "text"         replace an existing entry in place
+  search "term"                 grep all memory files
+  index                         rebuild MEMORY.md index from files on disk
+  remote [set <url>]            show or set the git remote (private repos only)
+  sync                          pull --rebase + push (no-op without a remote)
+  doctor                        check repo, PATH, and per-host wiring
+  install [--host a,b|all]      wire hooks + rules into detected agent hosts
+
+flags:
+  --project                     scope the entry to the current git repo
+  --file <topic>                write to a topic file instead of MEMORY.md
+  --kind <k>                    add kind metadata (preference|fact|decision|howto)
+  --cwd <dir>                   resolve project/host context against this dir
+  --allow-secret                bypass secret-shape refusal
+`;
+
+function parseFlags(argv) {
+  const flags = {};
+  const pos = [];
+  for (let i = 0; i < argv.length; i++) {
+    const a = argv[i];
+    if (a.startsWith('--')) {
+      const eq = a.indexOf('=');
+      if (eq >= 0) flags[a.slice(2, eq)] = a.slice(eq + 1);
+      else if (i + 1 < argv.length && !argv[i + 1].startsWith('--'))
+        flags[a.slice(2)] = argv[++i];
+      else flags[a.slice(2)] = true;
+    } else pos.push(a);
+  }
+  return { flags, pos };
+}
+
+export function main(argv) {
+  const [cmd, ...rest] = argv;
+  const { flags, pos } = parseFlags(rest);
+  try {
+    switch (cmd) {
+      case 'ensure':
+        return cmdEnsure();
+      case 'context':
+        return cmdContext({ ...flags, cwd: flags.cwd || pos[0] });
+      case 'add': {
+        const text = pos.join(' ');
+        if (!text.trim()) {
+          process.stderr.write('usage: amr add "text"\n');
+          process.exitCode = 1;
+          return;
+        }
+        return cmdAdd(text, flags);
+      }
+      case 'update': {
+        const [match, ...t] = pos;
+        const text = t.join(' ');
+        if (!match || !text.trim()) {
+          process.stderr.write('usage: amr update "match" "new text"\n');
+          process.exitCode = 1;
+          return;
+        }
+        return cmdUpdate(match, text, flags);
+      }
+      case 'search': {
+        const term = pos.join(' ');
+        if (!term.trim()) {
+          process.stderr.write('usage: amr search "term"\n');
+          process.exitCode = 1;
+          return;
+        }
+        return cmdSearch(term);
+      }
+      case 'index':
+        return cmdIndex();
+      case 'remote':
+        return cmdRemote(pos);
+      case 'sync':
+        return cmdSync();
+      case 'doctor':
+        return cmdDoctor();
+      case 'install':
+        return cmdInstall(flags);
+      case 'version':
+      case '--version':
+      case '-v':
+        return process.stdout.write('amr 0.1.0\n');
+      case 'help':
+      case '--help':
+      case '-h':
+      case undefined:
+        return process.stdout.write(USAGE);
+      default:
+        process.stderr.write(`unknown command: ${cmd}\n\n${USAGE}`);
+        process.exitCode = 1;
+    }
+  } catch (e) {
+    process.stderr.write(`amr: ${e.message}\n`);
+    process.exitCode = 1;
+  }
+}
