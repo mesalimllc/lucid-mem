@@ -72,9 +72,16 @@ function parseFlags(argv) {
   return { flags, pos };
 }
 
+// Subcommands invoked by host session hooks. AMR_HOOKS_OFF is set on
+// processes amr spawns itself (the coverage judge) so a judge session's
+// own hooks don't pay for context/sync/dream/coverage on the way in
+// and out — that overhead dominated judge latency.
+const HOOK_CMDS = new Set(['context', 'sync', 'dream', 'coverage']);
+
 export function main(argv) {
   const [cmd, ...rest] = argv;
   const { flags, pos } = parseFlags(rest);
+  if (process.env.AMR_HOOKS_OFF && HOOK_CMDS.has(cmd)) return 0;
   try {
     switch (cmd) {
       case 'ensure':

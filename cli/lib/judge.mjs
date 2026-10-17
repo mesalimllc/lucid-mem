@@ -14,9 +14,9 @@ const TIMEOUT_MS = 180_000;
 const BACKENDS = {
   claude: {
     bin: 'claude',
-    // --strict-mcp-config with an empty config skips MCP server init —
-    // the dominant startup cost (a bare -p session here takes ~80s with
-    // MCP, a few seconds without).
+    // --strict-mcp-config with an empty config skips MCP init,
+    // --model haiku is plenty for classification, --max-turns 1 keeps
+    // it to a single answer.
     args: () => [
       '-p',
       '--output-format',
@@ -24,6 +24,10 @@ const BACKENDS = {
       '--mcp-config',
       '{"mcpServers":{}}',
       '--strict-mcp-config',
+      '--model',
+      'haiku',
+      '--max-turns',
+      '1',
     ],
     extract: (r) => {
       try {
@@ -103,10 +107,11 @@ export function runJudge(name, prompt) {
       encoding: 'utf8',
       timeout: TIMEOUT_MS,
       // Neutral cwd: the judge mustn't load whatever project coverage
-      // was run from. AMR_NO_JUDGE stops the spawned session's own
-      // hooks from recursing into another judge call.
+      // was run from. AMR_NO_JUDGE stops recursion into another judge;
+      // AMR_HOOKS_OFF no-ops amr's own hook subcommands inside the
+      // spawned session (they'd run sync/dream/coverage on exit).
       cwd: os.tmpdir(),
-      env: { ...process.env, AMR_NO_JUDGE: '1' },
+      env: { ...process.env, AMR_NO_JUDGE: '1', AMR_HOOKS_OFF: '1' },
     };
     if (name === 'env')
       r = spawnSync(process.env.AMR_JUDGE_CMD, { ...opts, shell: true });
