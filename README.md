@@ -91,7 +91,7 @@ One memory repo serves every project. Project files live at `projects/<name>-<ha
 
 - `amr context` is mode-based: inside a repo that has a memory file it is **project-scoped** — this project plus linked siblings, each capped at 25 bullets, up to 8 project files, no global section. Outside any known project (or in a repo with no memory yet) it is **global bullets plus a pooled digest** — the latest 25 entries across all project files, newest first.
 - `amr link trackdub-gated` inside `Trackdub` makes gated's memory appear whenever a session runs in Trackdub. Links are directional and transitive; `--for <p>` links on another repo's behalf.
-- `private` means **unreachable transitively**: direct links and explicit `--also` attach it; it refuses when reached through another repo's links, and it never contributes to the pooled outside digest. Context prints a `<!-- omitted by private policy -->` marker instead of dropping silently.
+- `private` means **unlinked reachability only**: it attaches through your link graph (direct or transitive) and explicit `--also`, but never contributes to the pooled outside digest — the one place foreign sessions could see it unlinked.
 - `noglobal` keeps a project out of the pooled outside digest (project sessions are already global-free by default).
 - Unknown link targets surface as `<!-- unresolved -->` markers, and `amr doctor` flags dead `amr.json` keys.
 

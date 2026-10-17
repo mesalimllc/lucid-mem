@@ -91,9 +91,9 @@ export function cmdContext(flags) {
 
   // Attach list: the current project, then its config links
   // (transitive, deduped, max 8 total) and any --also names.
-  // private blocks reachability from repos that never linked it:
-  // direct links (siblings) and explicit --also attach fine; it only
-  // refuses when reached transitively through another project's links.
+  // Links are the owner's curation — private projects attach fine
+  // through them. `private` only keeps a project out of the pooled
+  // outside digest, the one unlinked exposure path.
   const bySlug = new Map(listProjects(home).map((p) => [p.slug, p]));
   const attach = [];
   const seen = new Set();
@@ -103,17 +103,16 @@ export function cmdContext(flags) {
     attach.push({ slug, name: bySlug.get(slug)?.name || slug, linked });
   };
   if (proj) push(proj.slug, false);
-  const queue = (entry?.links || []).map((k) => ({ k, via: 'entry' }));
+  const queue = (entry?.links || []).map((k) => ({ k }));
   if (flags.also)
     queue.push(
       ...String(flags.also)
         .split(',')
-        .map((k) => ({ k, via: 'also' }))
+        .map((k) => ({ k }))
     );
-  const refused = [];
   const unknown = [];
   while (queue.length && attach.length < 8) {
-    const { k: raw, via } = queue.shift();
+    const { k: raw } = queue.shift();
     const key = String(raw).trim().toLowerCase();
     if (!key) continue;
     const slug = resolveProjectSlug(home, key);
@@ -123,13 +122,8 @@ export function cmdContext(flags) {
     }
     if (seen.has(slug)) continue;
     const e = projectEntry(cfg, { slug, name: key });
-    if (e?.private && via === 'transitive') {
-      refused.push(key);
-      continue;
-    }
     push(slug, true);
-    if (e?.links)
-      queue.push(...e.links.map((l) => ({ k: l, via: 'transitive' })));
+    if (e?.links) queue.push(...e.links.map((l) => ({ k: l })));
   }
 
   const lines = [`<agent-memory repo="${home}">`];
@@ -165,11 +159,6 @@ export function cmdContext(flags) {
       lines.push('', '## Recent project memory', recent.join('\n'));
   }
   if (indexLinks.length) lines.push('', '## Index', indexLinks.join('\n'));
-  if (refused.length)
-    lines.push(
-      '',
-      `<!-- ${refused.length} linked project(s) omitted by private policy: ${refused.join(', ')} -->`
-    );
   if (unknown.length)
     lines.push(
       '',

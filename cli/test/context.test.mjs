@@ -28,7 +28,7 @@ test('context in a repo shows its project memory', () => {
   assert.match(r.stdout, /app uses redis cache/);
 });
 
-test('link attaches a sibling project transitively; private blocks transitive only', () => {
+test('link attaches siblings and private transitively (links are owner curation)', () => {
   const home = tmpdir();
   const base = tmpdir();
   const repoA = initRepo(path.join(base, 'a'), 'https://github.com/acme/a.git');
@@ -45,13 +45,13 @@ test('link attaches a sibling project transitively; private blocks transitive on
   const inB = run(['context'], { amrHome: home, cwd: repoB });
   assert.match(inB.stdout, /a uses sqlite/);
 
-  // c links to b; a is private -> transitive refusal in c
+  // c links to b; a is private -> still attaches transitively, since
+  // the link chain is the owner's own curation
   run(['link', 'b'], { amrHome: home, cwd: repoC });
   run(['policy', 'a', 'private', 'true'], { amrHome: home, cwd: repoA });
   const inC = run(['context'], { amrHome: home, cwd: repoC });
   assert.match(inC.stdout, /b uses kafka/);
-  assert.match(inC.stdout, /omitted by private policy/);
-  assert.ok(!inC.stdout.includes('a uses sqlite'));
+  assert.match(inC.stdout, /a uses sqlite/);
 
   // explicit --also still attaches the private project
   const explicit = run(['context', '--also', 'a'], { amrHome: home, cwd: repoC });

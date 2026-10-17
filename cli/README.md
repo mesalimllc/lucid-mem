@@ -34,7 +34,7 @@ Memory lives in `~/agent-memory` — a real git repo you can read, diff, and poi
 
 ## Multi-repo memory
 
-One memory repo serves every project. `projects/<name>-<hash>.md` files key off the repo's origin remote, so clones share memory and same-named repos don't collide. Inside a known repo, `amr context` is project-scoped — the project's latest 25 plus linked siblings (up to 8 projects). Outside one, it shows global bullets plus the latest 25 pooled across all projects. `private` policy keeps a project out of transitive auto-attach and the pooled digest; `noglobal` keeps it out of the pooled digest only.
+One memory repo serves every project. `projects/<name>-<hash>.md` files key off the repo's origin remote, so clones share memory and same-named repos don't collide. Inside a known repo, `amr context` is project-scoped — the project's latest 25 plus linked siblings (up to 8 projects). Outside one, it shows global bullets plus the latest 25 pooled across all projects. `private` and `noglobal` policies keep a project out of the pooled digest (links still reach private projects — your link graph is your own curation).
 
 ## MCP
 
