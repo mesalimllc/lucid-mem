@@ -737,6 +737,19 @@ export function cmdDoctor() {
     }
     if (dead.length)
       out(`config      : ${dead.length} unresolvable project key(s): ${dead.join(', ')}`);
+    try {
+      const cov = fs
+        .readFileSync(path.join(homeDir, 'dreams', 'coverage.jsonl'), 'utf8')
+        .trim()
+        .split('\n')
+        .filter(Boolean)
+        .map((l) => JSON.parse(l));
+      const last = cov[cov.length - 1];
+      if (last?.rate != null)
+        out(
+          `save rate   : ${last.rate}% (${last.covered}/${last.durable} durable signals, ${last.days}d, ${last.ts.slice(0, 10)})`
+        );
+    } catch {}
     const missingPeers = (cfg.extraRepos || []).filter(
       (p) =>
         !fs.existsSync(

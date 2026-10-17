@@ -18,6 +18,7 @@ import {
 import { cmdDiscover } from './discover.mjs';
 import { cmdDream } from './dream.mjs';
 import { cmdHarvest } from './harvest.mjs';
+import { cmdCoverage } from './coverage.mjs';
 import { cmdDoctor, cmdInstall, cmdUninstall } from './install.mjs';
 import { cmdServe } from './serve.mjs';
 
@@ -41,6 +42,7 @@ usage: amr <command> [args] [flags]
   dream [--days N] [--fix] [--compact] [--keep N] [--json]   memory health; --fix cleans up, --compact archives overflow; --spin plays the animation
   harvest [--days N] [--json] [--extract] [--max N] [--min C]   list transcripts; --extract streams normalized user messages
   discover [--days N] [--min N] [--json]   rank repos by transcript mentions; shows memory coverage + suggested links
+  coverage [--days N] [--json] [--no-log]  save-rate metric: durable transcript signals vs memory repo
   install [--host a,b|all]      wire hooks + rules + MCP into detected agent hosts
   uninstall [--host a,b|all]    remove amr hooks + rules + MCP entries
   serve                         stdio MCP server (memory_context/add/search/update)
@@ -131,6 +133,8 @@ export function main(argv) {
         return cmdHarvest(flags);
       case 'discover':
         return cmdDiscover(flags);
+      case 'coverage':
+        return cmdCoverage(flags);
       case 'install':
         return cmdInstall(flags);
       case 'uninstall':
