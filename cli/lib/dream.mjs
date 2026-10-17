@@ -60,6 +60,7 @@ function collect(home) {
         raw: l,
         norm: bulletText(l),
         date: metaDate(l),
+        archived: rel.startsWith('archive/'),
       });
     });
   }
@@ -87,14 +88,17 @@ export function analyze(home, { staleDays = 90 } = {}) {
         possibleDups.push([byNorm.get(a)[0], byNorm.get(b)[0]]);
     }
 
-  const stale = entries.filter((e) => e.date && e.date < cutoff);
-  const noDate = entries.filter((e) => !e.date).length;
+  const stale = entries.filter(
+    (e) => !e.archived && e.date && e.date < cutoff
+  );
+  const noDate = entries.filter((e) => !e.archived && !e.date).length;
 
   const filesNoExt = files.map((f) => f.replace(/\.md$/, ''));
+  const liveNoExt = filesNoExt.filter((f) => !f.startsWith('archive/'));
   const deadLinks = [...indexLinks].filter(
     (l) => !filesNoExt.includes(l)
   );
-  const unindexed = filesNoExt.filter((f) => ![...indexLinks].includes(f));
+  const unindexed = liveNoExt.filter((f) => ![...indexLinks].includes(f));
 
   const mem = path.join(home, 'MEMORY.md');
   const memLines = fs.existsSync(mem)
@@ -180,10 +184,10 @@ export function cmdDream(flags) {
   if (report.entriesWithoutDate)
     out(`  entries missing 'added:' date: ${report.entriesWithoutDate}`);
 
-  if (!flags.fix) {
+  if (!flags.fix && !flags.compact) {
     touchDream(home);
     out('');
-    out('run `amr dream --fix` for mechanical cleanup (index, dead links, exact dups); semantic merging needs an agent — see dreams/DREAMER.md');
+    out('run `amr dream --fix` for mechanical cleanup (index, dead links, exact dups); add --compact to archive entries beyond the digest cap. Semantic merging needs an agent — see dreams/DREAMER.md');
     return;
   }
 
@@ -246,6 +250,60 @@ export function cmdDream(flags) {
   }
   if (touched.has('MEMORY.md'))
     fs.writeFileSync(memPath, memLines.join('\n').replace(/\n{3,}/g, '\n\n'));
+
+  // --compact: archive oldest entries beyond the digest cap so live
+  // files never exceed what `amr context` injects. Archive files stay
+  // searchable via `amr search`; they are not session-injected.
+  if (flags.compact) {
+    const keep = parseInt(flags.keep || '25', 10);
+    const pdir = path.join(home, 'projects');
+    const targets = [
+      'MEMORY.md',
+      ...(fs.existsSync(pdir)
+        ? fs
+            .readdirSync(pdir, { withFileTypes: true })
+            .filter((e) => e.isFile() && e.name.endsWith('.md'))
+            .map((e) => `projects/${e.name}`)
+        : []),
+    ];
+    for (const rel of targets) {
+      const abs = path.join(home, rel);
+      if (!fs.existsSync(abs)) continue;
+      const lines = fs.readFileSync(abs, 'utf8').split(/\r?\n/);
+      const idxAt =
+        rel === 'MEMORY.md'
+          ? lines.findIndex((l) => /^##\s+Index/.test(l))
+          : -1;
+      const headEnd = idxAt >= 0 ? idxAt : lines.length;
+      const bulletIdx = [];
+      for (let i = 0; i < headEnd; i++)
+        if (lines[i].trim().startsWith('- ') && !lines[i].includes('[['))
+          bulletIdx.push(i);
+      if (bulletIdx.length <= keep) continue;
+      const move = new Set(bulletIdx.slice(0, bulletIdx.length - keep));
+      const archived = [...move]
+        .sort((a, b) => a - b)
+        .map((i) => lines[i]);
+      const arel =
+        rel === 'MEMORY.md' ? 'archive/MEMORY.md' : `archive/${rel}`;
+      const aabs = path.join(home, arel);
+      if (!fs.existsSync(aabs)) {
+        fs.mkdirSync(path.dirname(aabs), { recursive: true });
+        fs.writeFileSync(aabs, `# Archive: ${rel}\n\n`);
+      }
+      fs.appendFileSync(aabs, archived.join('\n') + '\n');
+      fs.writeFileSync(
+        abs,
+        lines
+          .filter((_, i) => !move.has(i))
+          .join('\n')
+          .replace(/\n{3,}/g, '\n\n')
+      );
+      touched.add(rel);
+      touched.add(arel);
+      changed.push(`${rel}: archived ${archived.length} oldest entrie(s)`);
+    }
+  }
 
   touchDream(home);
   if (!changed.length) return out('nothing mechanical to fix');
