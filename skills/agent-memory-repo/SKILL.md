@@ -7,6 +7,10 @@ description: Keep memory across sessions in a separate local git repo that follo
 
 Keep the user's memory in a git repo that follows the [Agent Memory Repo spec](https://github.com/AgentMemoryRepo/agentmemoryrepo). This skill does work only when it is invoked. It doesn't add hooks, scheduled jobs, or startup scripts, and it doesn't claim that memory loads on its own in later sessions.
 
+## Autonomous mode (Agent Memory Harness)
+
+If the `amr` CLI is on this machine (`amr doctor`, or `node <path>/cli/amr.mjs` if not on PATH), the harness already handles memory: session-start hooks inject `amr context` output, and the agent saves durable facts unprompted with `amr add`. In that case this skill is the manual fallback — use it only when the harness is absent or its repo isn't the one the user means. Prefer `amr` commands (`context`, `add`, `update`, `search`, `sync`) over the raw git procedures below; they enforce the same spec plus dedup, secret refusal, locking, and index maintenance.
+
 ## Ground rules
 
 - **Separate repo.** Memory lives in its own git repo, never inside the project you're working on and never in the `AgentMemoryRepo/agentmemoryrepo` spec repo.
