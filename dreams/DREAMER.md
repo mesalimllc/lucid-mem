@@ -8,17 +8,20 @@ as `node <path> <command>`.
 
 ## Procedure
 
-0. **Harvest new memory.** Run `amr harvest --days 14 --json` — it lists
-   recent session transcripts across agent hosts on this machine, newest
-   first. Skim the most recent files (user messages over tool output) for
-   durable preferences, corrections, decisions, and project facts not
-   already in memory, and save candidates with `amr add`. Transcripts can
-   contain secrets: `amr add` refuses secret-shaped text, but still never
-   copy raw tokens or credentials. Skip entries that are only task-local
-   or cheap to rediscover.
+0. **Harvest new memory.** Run `amr harvest --days 14 --extract` — it
+   streams normalized user messages (injected prompts, tool output and
+   command blobs already filtered) across agent hosts, newest first.
+   Mine it for durable preferences, corrections, decisions, and project
+   facts not already in memory; save candidates with `amr add`. Use
+   `--json` for file paths when you need to read a specific transcript
+   in full. Transcripts can contain secrets: `amr add` refuses
+   secret-shaped text, but still never copy raw tokens or credentials.
+   Skip entries that are only task-local or cheap to rediscover.
 1. Run `amr dream --json`. Read the report.
-2. Run `amr dream --fix`. It applies the safe mechanical cleanups (exact
-   duplicates, dead index links, unindexed files) and commits them.
+2. Run `amr dream --fix --compact`. It applies the safe mechanical
+   cleanups (exact duplicates, dead index links, unindexed files) and
+   archives entries beyond the live caps into `archive/` — archived
+   entries stay searchable via `amr search` but are not session-injected.
 3. Semantic pass — your real work:
    - Read `MEMORY.md`, then every file reachable from its `## Index` links.
    - **Merge** entries that say the same thing. Keep the newest or most
