@@ -174,6 +174,48 @@ const HOSTS = {
       },
     ],
   },
+  antigravity: {
+    // Google's agentic IDE (Windsurf-derived). Shares ~/.gemini with the
+    // CLIs: global rules at GEMINI.md, MCP at config/mcp_config.json in
+    // the standard mcpServers shape. Rules+MCP tier; no injectable hooks.
+    detect: () =>
+      !!firstExisting([
+        path.join(appdata, 'Antigravity IDE'),
+        path.join(appdata, 'Antigravity'),
+        path.join(home, '.gemini', 'antigravity-ide'),
+        path.join(home, '.gemini', 'antigravity-cli'),
+      ]),
+    mcpJson: () => path.join(home, '.gemini', 'config', 'mcp_config.json'),
+    rules: () => [
+      {
+        path: path.join(home, '.gemini', 'GEMINI.md'),
+        content: RULE_BLOCK,
+        append: true,
+      },
+    ],
+  },
+  opencode: {
+    // SST's opencode CLI. Global rules at ~/.config/opencode/AGENTS.md;
+    // MCP lives in opencode.json's "mcp" object with a local/remote
+    // schema different from mcpServers — needs its own merge.
+    detect: () =>
+      !!firstExisting([
+        path.join(home, '.config', 'opencode'),
+        path.join(home, '.opencode'),
+      ]),
+    mcpOpencode: () =>
+      firstExisting([
+        path.join(home, '.config', 'opencode', 'opencode.json'),
+        path.join(home, '.config', 'opencode', 'opencode.jsonc'),
+      ]) || path.join(home, '.config', 'opencode', 'opencode.json'),
+    rules: () => [
+      {
+        path: path.join(home, '.config', 'opencode', 'AGENTS.md'),
+        content: RULE_BLOCK,
+        append: true,
+      },
+    ],
+  },
 };
 
 const MCP_ENTRY = { command: 'node', args: [CLI_ENTRY, 'serve'] };
@@ -204,6 +246,36 @@ function mergeMcpToml(file) {
     file,
     `${text}\n[mcp_servers.agent-memory]\ncommand = "node"\nargs = ["${CLI_ENTRY.replace(/\\/g, '\\\\')}", "serve"]\n`
   );
+  return true;
+}
+
+// opencode.json uses `"mcp": {name: {type:'local', command:[...]}}` —
+// a different schema from mcpServers. .jsonc files may contain comments
+// that break JSON.parse; never clobber an unparseable config.
+function mergeMcpOpencode(file) {
+  let cfg = {};
+  if (fs.existsSync(file)) {
+    const text = fs.readFileSync(file, 'utf8');
+    try {
+      cfg = JSON.parse(text);
+    } catch {
+      // .jsonc or otherwise unparseable: already-wired counts as done,
+      // otherwise skip without clobbering.
+      return text.includes('"agent-memory"') ? false : 'skipped (unparseable)';
+    }
+  }
+  if (cfg.mcp?.['agent-memory']) return false;
+  cfg.mcp = {
+    ...(cfg.mcp || {}),
+    'agent-memory': {
+      type: 'local',
+      command: ['node', CLI_ENTRY, 'serve'],
+      disabled: false,
+    },
+  };
+  backup(file);
+  fs.mkdirSync(path.dirname(file), { recursive: true });
+  fs.writeFileSync(file, JSON.stringify(cfg, null, 2) + '\n');
   return true;
 }
 
@@ -408,6 +480,17 @@ export function cmdInstall(flags) {
             : `mcp already wired in ${file}`
         );
       }
+      if (h.mcpOpencode) {
+        const file = h.mcpOpencode();
+        const res = mergeMcpOpencode(file);
+        did.push(
+          res === true
+            ? `mcp +agent-memory in ${file}`
+            : res === false
+            ? `mcp already wired in ${file}`
+            : `mcp ${res}: ${file}`
+        );
+      }
     } catch (e) {
       err(`${name}: ${e.message}`);
       continue;
@@ -426,12 +509,13 @@ function hostWired(name) {
   try {
     if (h.hooksJson && has(h.hooksJson(), 'amr')) return 'wired';
     if (h.settingsJson && has(h.settingsJson(), 'amr')) return 'wired';
+    const mcp =
+      (h.mcpJson && has(h.mcpJson(), 'agent-memory')) ||
+      (h.mcpToml && has(h.mcpToml(), 'agent-memory')) ||
+      (h.mcpOpencode && has(h.mcpOpencode(), 'agent-memory'));
     if (h.rules && h.rules().some((r) => has(r.path, MARK_BEGIN)))
-      return 'wired (rules only)';
-    if (h.mcpJson && has(h.mcpJson(), 'agent-memory'))
-      return 'wired (mcp only)';
-    if (h.mcpToml && has(h.mcpToml(), 'agent-memory'))
-      return 'wired (mcp only)';
+      return mcp ? 'wired (rules+mcp)' : 'wired (rules only)';
+    if (mcp) return 'wired (mcp only)';
   } catch {}
   return 'not wired';
 }
