@@ -215,9 +215,11 @@ function backup(file) {
 const HOOK_ENTRIES = [
   ['sessionStart', 'context'],
   ['sessionEnd', 'sync'],
-  ['sessionEnd', 'dream --if-stale 7 --fix'],
+  ['sessionEnd', 'dream --if-stale 7 --fix --compact'],
 ];
 
+// Match installed hooks by subcommand token ("dream"), but rewrite the
+// command when it drifts from HOOK_ENTRIES so upgrades land in place.
 function mergeHooksJson(file, entries) {
   let cfg = { hooks: {}, version: 1 };
   if (fs.existsSync(file) && fs.readFileSync(file, 'utf8').trim()) {
@@ -230,14 +232,24 @@ function mergeHooksJson(file, entries) {
   cfg.hooks ||= {};
   const added = [];
   for (const [event, sub] of entries) {
-    cfg.hooks[event] ||= [];
-    const already = cfg.hooks[event].some(
-      (e) =>
+    const key = sub.split(' ')[0];
+    const want = hookCmd(sub);
+    const list = (cfg.hooks[event] ||= []);
+    let found = false;
+    for (const e of list) {
+      if (
         typeof e?.command === 'string' &&
-        e.command.includes(`amr.mjs" ${sub}`)
-    );
-    if (!already) {
-      cfg.hooks[event].push({ command: hookCmd(sub) });
+        e.command.includes(`amr.mjs" ${key}`)
+      ) {
+        found = true;
+        if (e.command !== want) {
+          e.command = want;
+          added.push(`~${event}:${key}`);
+        }
+      }
+    }
+    if (!found) {
+      list.push({ command: want });
       added.push(`${event}:${sub}`);
     }
   }
@@ -261,18 +273,26 @@ function mergeClaudeSettings(file, entries) {
   cfg.hooks ||= {};
   const added = [];
   for (const [event, sub] of entries) {
-    cfg.hooks[event] ||= [];
-    const already = cfg.hooks[event].some((e) =>
-      (e?.hooks || []).some(
-        (h) =>
+    const key = sub.split(' ')[0];
+    const want = hookCmd(sub);
+    const list = (cfg.hooks[event] ||= []);
+    let found = false;
+    for (const e of list) {
+      for (const h of e?.hooks || []) {
+        if (
           typeof h?.command === 'string' &&
-          h.command.includes(`amr.mjs" ${sub}`)
-      )
-    );
-    if (!already) {
-      cfg.hooks[event].push({
-        hooks: [{ type: 'command', command: hookCmd(sub) }],
-      });
+          h.command.includes(`amr.mjs" ${key}`)
+        ) {
+          found = true;
+          if (h.command !== want) {
+            h.command = want;
+            added.push(`~${event}:${key}`);
+          }
+        }
+      }
+    }
+    if (!found) {
+      list.push({ hooks: [{ type: 'command', command: want }] });
       added.push(`${event}:${sub}`);
     }
   }
