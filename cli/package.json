@@ -1,7 +1,7 @@
 {
   "name": "lucid-mem",
-  "version": "0.2.0",
-  "description": "lucid-mem (amr) — autonomous git-backed agent memory (Agent Memory Repo spec)",
+  "version": "0.2.1",
+  "description": "lucid-mem (amr) - autonomous git-backed agent memory (Agent Memory Repo spec)",
   "type": "module",
   "bin": {
     "amr": "./amr.mjs",
