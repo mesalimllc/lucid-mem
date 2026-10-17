@@ -28,8 +28,10 @@ export const git = (repo, args, opts) => sh('git', ['-C', repo, ...args], opts);
 // while env vars may carry 8.3 aliases (RUNNER~1) or symlinks.
 const canon = (p) => {
   const r = path.resolve(p);
+  // .native expands 8.3 aliases and symlinks; plain realpathSync keeps
+  // 8.3 names as-is on Windows (verified).
   try {
-    return fs.realpathSync(r);
+    return fs.realpathSync.native(r);
   } catch {
     return r;
   }
