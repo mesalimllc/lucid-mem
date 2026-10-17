@@ -201,7 +201,8 @@ function stampBlock(file, content, { append }) {
       `${MARK_BEGIN}[\\s\\S]*?${MARK_END}`,
       'm'
     );
-    const next = text.replace(re, content);
+    const markedPart = (content.match(re) || [content])[0];
+    const next = text.replace(re, markedPart);
     if (next !== text) {
       backup(file);
       fs.writeFileSync(file, next);
