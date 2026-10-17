@@ -2,6 +2,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { commit, ensureRepo, numFlag, withLock } from './core.mjs';
 import { collectSessions, extractMessages } from './harvest.mjs';
+import { resolveJudge, runJudge } from './judge.mjs';
 
 const out = (s = '') => process.stdout.write(s + '\n');
 
@@ -18,7 +19,7 @@ const WEAK = /\b(shipped|released|pinned|going with)\b/i;
 // annotations, agent-monologue steps (antigravity mixes them into the
 // user slot).
 const DUMP =
-  /^(error:|context summary|#|```|\{|\[|\/|\d+\s|\d+[:|]|[-\w./]+ total \d+|total \d+ |diff |--- |@@ |index |[MDAR] \S+\.\w+|response annotations|base directory)/i;
+  /^(error:|context summary|#|```|\{|\[|\/|\d+\s|\d+[:|]|[-\w./]+ total \d+|total \d+ |diff |--- |@@ |index |[MDAR] \S+\.\w+|response annotations|base directory|permission for this action|\[?system)/i;
 const heavyMarkup = (t) =>
   (t.match(/[{}"|#*<>_=[\]\\`]/g) || []).length / t.length > 0.12;
 const FILE_REFS =
@@ -67,19 +68,32 @@ const normWords = (t) =>
     .split(/\s+/)
     .filter(Boolean);
 
-const corpusText = (home) => {
-  const parts = [];
+const walkMd = (home) => {
+  const files = [];
   (function walk(dir) {
     for (const e of fs.readdirSync(dir, { withFileTypes: true })) {
       if (e.name === '.git') continue;
       const p = path.join(dir, e.name);
       if (e.isDirectory()) walk(p);
       else if (e.name.endsWith('.md') && e.name !== 'pending-saves.md')
-        parts.push(normWords(fs.readFileSync(p, 'utf8')).join(' '));
+        files.push(p);
     }
   })(home);
-  return ` ${parts.join(' ')} `;
+  return files;
 };
+
+const corpusText = (home) =>
+  ` ${walkMd(home)
+    .map((p) => normWords(fs.readFileSync(p, 'utf8')).join(' '))
+    .join(' ')} `;
+
+// Individual memory entries for the judge prompt — bounded so the
+// prompt stays small even on large repos.
+const corpusLines = (home) =>
+  walkMd(home)
+    .flatMap((p) => fs.readFileSync(p, 'utf8').split(/\r?\n/))
+    .filter((l) => l.trim().startsWith('- '))
+    .slice(0, 200);
 
 // A durable signal counts as covered when a 4-word run of its content
 // appears verbatim in the corpus (near-verbatim save), or when ≥35% of
@@ -100,6 +114,64 @@ const covered = (text, corpus) => {
   const hits = t.filter(hit).length;
   return hits / t.length >= 0.35;
 };
+
+// One bounded judge call: prune recall cues and chatter from the
+// deterministic candidate set, decide coverage semantically (paraphrase
+// saves the term-overlap check misses), and distill a proposed entry
+// per miss so pending review is approve/reject instead of rewrite.
+function judgePass(name, candidates, corpus) {
+  const list = candidates
+    .slice(0, 40)
+    .map(
+      (c, i) =>
+        `${i}\t[${c.host}] ${c.mtime.slice(0, 10)}\t${c.text
+          .slice(0, 300)
+          .replace(/\s+/g, ' ')}`
+    )
+    .join('\n');
+  const prompt = [
+    'You are judging save coverage for an agent memory system.',
+    '',
+    'CANDIDATES — user statements from transcripts (index<TAB>[host] date<TAB>text):',
+    list,
+    '',
+    'MEMORY — entries already saved:',
+    corpus.join('\n') || '(empty)',
+    '',
+    'For each index decide:',
+    '- durable: it states a durable preference, decision, correction, rule, fact, or root cause worth persisting across sessions. Recall cues ("remember that?"), task chatter, status updates, and transient context are NOT durable.',
+    '- covered: the durable content is already represented in MEMORY (paraphrase counts).',
+    '- proposal: if durable and not covered, one concise memory entry suitable for `amr add`.',
+    '',
+    'Reply with ONLY JSON: {"results":[{"i":0,"durable":true,"kind":"preference|decision|fact|rule|correction|other","covered":false,"proposal":"..."}]} — one entry per candidate index.',
+  ].join('\n');
+  const text = runJudge(name, prompt);
+  if (!text) return null;
+  const s = text.indexOf('{');
+  const e = text.lastIndexOf('}');
+  if (s < 0 || e <= s) return null;
+  try {
+    const r = JSON.parse(text.slice(s, e + 1));
+    return Array.isArray(r?.results) ? r.results : null;
+  } catch {
+    return null;
+  }
+}
+
+function applyVerdicts(durable, verdicts) {
+  const byIdx = new Map(verdicts.map((v) => [v.i, v]));
+  for (let i = durable.length - 1; i >= 0; i--) {
+    const v = byIdx.get(i);
+    if (!v) continue;
+    if (v.durable === false) {
+      durable.splice(i, 1);
+      continue;
+    }
+    if (typeof v.covered === 'boolean') durable[i].covered = v.covered;
+    if (typeof v.proposal === 'string' && v.proposal.trim())
+      durable[i].proposal = v.proposal.trim().slice(0, 200);
+  }
+}
 
 export function cmdCoverage(flags) {
   const home = ensureRepo();
@@ -122,6 +194,26 @@ export function cmdCoverage(flags) {
     durable.push({ ...m, covered: covered(m.text, corpus) });
   }
 
+  // Optional judge pass. AMR_NO_JUDGE is set on judge child processes so
+  // a spawned host session's own hooks can't recurse into judging.
+  let judge = null;
+  if (flags.judge !== undefined && !process.env.AMR_NO_JUDGE) {
+    const name = resolveJudge(flags.judge);
+    if (!name)
+      out(
+        `note: --judge ${flags.judge === true ? '' : flags.judge + ' '}unavailable — deterministic results`
+      );
+    else {
+      const verdicts = judgePass(name, durable, corpusLines(home));
+      if (verdicts === null)
+        out(`note: judge ${name} failed — deterministic results`);
+      else {
+        judge = name;
+        applyVerdicts(durable, verdicts);
+      }
+    }
+  }
+
   const hits = durable.filter((d) => d.covered).length;
   const missed = durable.filter((d) => !d.covered);
   const rate = durable.length ? Math.round((hits / durable.length) * 100) : null;
@@ -142,7 +234,10 @@ export function cmdCoverage(flags) {
         '',
         ...missed
           .slice(0, 15)
-          .map((m) => `- [${m.host}] ${m.mtime.slice(0, 10)} ${m.text}`),
+          .map(
+            (m) =>
+              `- [${m.host}] ${m.mtime.slice(0, 10)} ${m.proposal || m.text.slice(0, 200)}`
+          ),
       ].join('\n');
       fs.writeFileSync(pending, body + '\n');
     } else fs.rmSync(pending, { force: true });
@@ -153,6 +248,7 @@ export function cmdCoverage(flags) {
       JSON.stringify(
         {
           days,
+          judge,
           transcripts: found.length,
           messages: msgs.length,
           durable: durable.length,
@@ -162,6 +258,7 @@ export function cmdCoverage(flags) {
             host: m.host,
             date: m.mtime.slice(0, 10),
             text: m.text.slice(0, 300),
+            proposal: m.proposal || null,
           })),
         },
         null,
@@ -172,7 +269,7 @@ export function cmdCoverage(flags) {
   if (!durable.length)
     return out(`no durable signals found in ${found.length} transcript(s), ${days}d`);
   out(
-    `coverage (${days}d): ${hits}/${durable.length} durable signals covered — save rate ${rate}%`
+    `coverage (${days}d${judge ? `, judge:${judge}` : ''}): ${hits}/${durable.length} durable signals covered — save rate ${rate}%`
   );
   if (missed.length) {
     out('missed:');
@@ -190,6 +287,7 @@ export function cmdCoverage(flags) {
     const entry = {
       ts: new Date().toISOString(),
       days,
+      judge,
       durable: durable.length,
       covered: hits,
       rate,

@@ -64,6 +64,52 @@ test('coverage reports save rate and lists missed durable signals', () => {
   assert.match(ctx.stdout, /cache TTL/);
 });
 
+test('--judge env refines verdicts: prunes recall cues, catches paraphrase saves, proposes entries', () => {
+  const { amrHome, fakeHome } = setup();
+  run(['add', 'package manager is pnpm'], { amrHome, fakeHome });
+  claudeJsonl(fakeHome, [
+    // deterministic: durable (always), covered? terms don't overlap → miss
+    'we always use pnpm for this repo, never npm',
+    // deterministic: durable marker, but it is a recall cue not a save
+    'going back to the sidebar rework, remember that?',
+  ]);
+  // Judge says: 0 is covered (paraphrase of the saved entry), 1 is not
+  // durable (recall cue). Deterministic-only run would say 0/2.
+  const judge = path.join(fakeHome, 'fake-judge.mjs');
+  fs.writeFileSync(
+    judge,
+    `let s='';process.stdin.on('data',d=>s+=d).on('end',()=>console.log(JSON.stringify({results:[
+      {i:0,durable:true,covered:true},
+      {i:1,durable:false,kind:'recall'}
+    ]})))`
+  );
+  const r = run(['coverage', '--days', '7', '--no-log', '--judge', 'env'], {
+    amrHome,
+    fakeHome,
+    env: { AMR_JUDGE_CMD: `node "${judge}"` },
+  });
+  assert.equal(r.status, 0, r.stderr);
+  assert.match(r.stdout, /judge:env/);
+  assert.match(r.stdout, /1\/1 durable signals covered — save rate 100%/);
+  // Nothing missed → the queue is empty.
+  assert.ok(!fs.existsSync(path.join(amrHome, 'dreams', 'pending-saves.md')));
+});
+
+test('a failing judge falls back to deterministic results', () => {
+  const { amrHome, fakeHome } = setup();
+  claudeJsonl(fakeHome, ['we decided the db migration runs weekly']);
+  const judge = path.join(fakeHome, 'bad-judge.mjs');
+  fs.writeFileSync(judge, 'process.exit(3)');
+  const r = run(['coverage', '--days', '7', '--no-log', '--judge', 'env'], {
+    amrHome,
+    fakeHome,
+    env: { AMR_JUDGE_CMD: `node "${judge}"` },
+  });
+  assert.equal(r.status, 0, r.stderr);
+  assert.match(r.stdout, /judge env failed — deterministic results/);
+  assert.match(r.stdout, /save rate 0%/);
+});
+
 test('pending queue drains once a missed signal is saved', () => {
   const { amrHome, fakeHome } = setup();
   claudeJsonl(fakeHome, ['we decided the db migration runs weekly']);
