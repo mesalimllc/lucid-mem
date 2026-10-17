@@ -44,7 +44,7 @@ Safety net for missed saves: a `stop`/`sessionEnd` hook commits any dirty files 
 ## Architecture
 
 ```
-agentmemoryrepo/                     (this fork; upstream = spec repo)
+lucid-mem/                           (this repo; spec lives upstream)
   SPEC.md, README.md                 upstream-synced, untouched
   cli/                               amr — zero-dependency Node CLI (npm bin)
     package.json

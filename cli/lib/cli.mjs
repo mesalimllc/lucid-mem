@@ -17,7 +17,7 @@ import { cmdHarvest } from './harvest.mjs';
 import { cmdDoctor, cmdInstall } from './install.mjs';
 import { cmdServe } from './serve.mjs';
 
-const USAGE = `amr — agent memory repo CLI
+const USAGE = `amr: agent memory CLI (lucid-mem)
 
 usage: amr <command> [args] [flags]
 

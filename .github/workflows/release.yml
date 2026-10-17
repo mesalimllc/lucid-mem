@@ -17,9 +17,10 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: 20
+          registry-url: https://registry.npmjs.org
 
       - name: Smoke test CLI
-        run: node cli/amr.mjs | grep -q "agent memory repo CLI"
+        run: node cli/amr.mjs | grep -q "lucid-mem"
 
       - name: Verify tag matches package version
         run: |
@@ -29,6 +30,12 @@ jobs:
             echo "Tag v$tag does not match cli/package.json version $pkg"
             exit 1
           fi
+
+      - name: Publish to npm
+        working-directory: cli
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+        run: npm publish --access public
 
       - name: Create GitHub release
         env:

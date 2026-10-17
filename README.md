@@ -1,15 +1,15 @@
-# Agent Memory Repo
+# lucid-mem
 
-Agents work better when they remember things across sessions. With Agent Memory Repo, your agent saves what it learns from you in real time, and that memory is live across sessions. Memories link to each other, so your agent navigates them like a wiki.
+Agents work better when they remember things across sessions. lucid-mem implements the [Agent Memory Repo spec](https://cognition.com/agent-memory-repo) as an autonomous layer: your agent saves what it learns from you in real time, and that memory is live across sessions. Memories link to each other, so your agent navigates them like a wiki.
 
-**This fork ships a working autonomy layer, not just the spec.** The `amr` CLI wires itself into 13 agent hosts so memory is retrieved at session start, saved while the agent works, synced through git, and maintained by scheduled dreaming , with no manual invocation. See `agentmemoryharness-plan.md` for the design.
+The `amr` CLI wires itself into 13 agent hosts so memory is retrieved at session start, saved while the agent works, synced through git, and maintained by scheduled dreaming, with no manual invocation. See `agentmemoryharness-plan.md` for the design.
 
 ## Quick start
 
 Requires Node.js and git.
 
 ```sh
-cd cli && npm link          # puts `amr` on PATH
+npm i -g lucid-mem          # or: clone this repo and `npm link` inside cli/
 amr ensure                  # create the memory repo (default ~/agent-memory, override with $AMR_HOME)
 amr install                 # wire every detected host (rules + hooks + MCP)
 amr doctor                  # verify everything
@@ -135,7 +135,7 @@ Repository layout, entries, metadata, and cross-links. The spec lives in [SPEC.m
 ## Repository layout
 
 ```text
-agentmemoryrepo/
+lucid-mem/
   SPEC.md                          upstream spec (format only)
   agentmemoryharness-plan.md       autonomy design doc
   cli/                             amr   zero-dependency Node CLI
@@ -148,7 +148,7 @@ agentmemoryrepo/
 
 ## Open development
 
-Agent Memory Repo was originally developed by Cognition and released as an open standard. This fork adds the autonomous harness on top. Propose spec changes upstream at [AgentMemoryRepo/agentmemoryrepo](https://github.com/AgentMemoryRepo/agentmemoryrepo).
+Agent Memory Repo was originally developed by Cognition and released as an open standard. lucid-mem implements the spec and adds the autonomous harness on top. Spec changes go upstream at [AgentMemoryRepo/agentmemoryrepo](https://github.com/AgentMemoryRepo/agentmemoryrepo).
 
 ## License
 

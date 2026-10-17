@@ -1,13 +1,22 @@
 {
-  "name": "agent-memory-harness",
-  "version": "0.1.0",
-  "description": "amr — autonomous git-backed agent memory (Agent Memory Repo spec)",
+  "name": "lucid-mem",
+  "version": "0.2.0",
+  "description": "lucid-mem (amr) — autonomous git-backed agent memory (Agent Memory Repo spec)",
   "type": "module",
   "bin": {
-    "amr": "./amr.mjs"
+    "amr": "./amr.mjs",
+    "lucid": "./amr.mjs"
   },
   "engines": {
     "node": ">=18"
   },
-  "license": "MIT"
+  "license": "MIT",
+  "repository": "tonythethompson/lucid-mem",
+  "keywords": [
+    "agent-memory",
+    "mcp",
+    "agent",
+    "memory",
+    "cli"
+  ]
 }
