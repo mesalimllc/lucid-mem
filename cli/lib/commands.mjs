@@ -319,9 +319,19 @@ export function cmdRemote(args) {
 export function cmdSync() {
   const home = ensureRepo();
   if (!hasRemote(home)) return out('no remote configured; local only');
-  const pull = git(home, ['pull', '--rebase', '--autostash'], { timeout: 15000 });
-  if (pull.code !== 0) err(`pull failed: ${pull.stderr}`);
-  const push = git(home, ['push'], { timeout: 15000 });
+  const hasUpstream =
+    git(home, ['rev-parse', '--abbrev-ref', '@{u}']).code === 0;
+  if (hasUpstream) {
+    const pull = git(home, ['pull', '--rebase', '--autostash'], {
+      timeout: 15000,
+    });
+    if (pull.code !== 0) err(`pull failed: ${pull.stderr}`);
+  }
+  const push = git(
+    home,
+    hasUpstream ? ['push'] : ['push', '--set-upstream', 'origin', 'HEAD'],
+    { timeout: 15000 }
+  );
   if (push.code !== 0) {
     err(`push failed: ${push.stderr}`);
     process.exitCode = 1;
