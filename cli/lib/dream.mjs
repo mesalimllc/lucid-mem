@@ -14,8 +14,10 @@ const err = (s) => process.stderr.write(s + '\n');
 const FRAMES = ['🌑', '🌒', '🌓', '🌔', '🌕', '🌖', '🌗', '🌘'];
 let spinTimer = null;
 let spinI = 0;
+let spinT0 = 0;
 const spinStart = (enabled) => {
   if (!enabled || spinTimer) return;
+  spinT0 = Date.now();
   spinTimer = setInterval(() => {
     process.stderr.write(`\r${FRAMES[spinI++ % FRAMES.length]} dreaming…`);
   }, 120);
@@ -25,6 +27,14 @@ const spinStop = () => {
   clearInterval(spinTimer);
   spinTimer = null;
   process.stderr.write('\r\x1b[K');
+};
+// Let the moon finish at least minMs of its cycle — interactive runs
+// get to watch the dream; the timer keeps the process alive until it
+// clears. Non-TTY runs never start the timer so this is a no-op there.
+const spinDone = (minMs = 1500) => {
+  if (!spinTimer) return;
+  const wait = Math.max(0, minMs - (Date.now() - spinT0));
+  setTimeout(spinStop, wait);
 };
 
 // Write via temp+rename so a kill mid-write can never leave a
@@ -203,7 +213,6 @@ export function cmdDream(flags) {
     out(JSON.stringify(report, null, 2));
     return;
   }
-  spinStop();
 
   const s = report.stats;
   out(`dream report — ${home}`);
@@ -361,6 +370,6 @@ export function cmdDream(flags) {
   };
   withLock(home, finish);
   } finally {
-    spinStop();
+    spinDone();
   }
 }
