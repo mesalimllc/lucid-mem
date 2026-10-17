@@ -32,7 +32,7 @@ usage: amr <command> [args] [flags]
   remote [set <url>]            show or set the git remote (private repos only)
   sync                          pull --rebase + push (no-op without a remote)
   doctor                        check repo, PATH, and per-host wiring
-  dream [--days N] [--fix] [--compact] [--keep N] [--json]   memory health; --fix cleans up, --compact archives overflow
+  dream [--days N] [--fix] [--compact] [--keep N] [--json]   memory health; --fix cleans up, --compact archives overflow; --spin plays the animation
   harvest [--days N] [--json] [--extract] [--max N] [--min C]   list transcripts; --extract streams normalized user messages
   install [--host a,b|all]      wire hooks + rules + MCP into detected agent hosts
   serve                         stdio MCP server (memory_context/add/search/update)

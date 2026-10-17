@@ -175,6 +175,16 @@ function touchDream(home) {
 }
 
 export function cmdDream(flags) {
+  if (flags.spin) {
+    if (!process.stderr.isTTY)
+      return out('run `amr dream --spin` in a real terminal to see the moons');
+    spinStart(true);
+    setTimeout(() => {
+      spinStop();
+      out('💤 dreamt.');
+    }, 2600);
+    return;
+  }
   const home = ensureRepo();
   const staleDays = parseInt(flags.days ?? '90', 10);
 
