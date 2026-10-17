@@ -18,5 +18,8 @@
     "agent",
     "memory",
     "cli"
-  ]
+  ],
+  "scripts": {
+    "test": "node --test"
+  }
 }
