@@ -100,6 +100,16 @@ const HOSTS = {
       append: true,
     }),
   },
+  codex: {
+    // No session-start hook: config.toml `notify` is fire-and-forget,
+    // single-slot, and can't inject context. AGENTS.md block only.
+    detect: () => fs.existsSync(path.join(home, '.codex')),
+    rules: () => ({
+      path: path.join(home, '.codex', 'AGENTS.md'),
+      content: RULE_BLOCK,
+      append: true,
+    }),
+  },
 };
 
 function backup(file) {
@@ -107,6 +117,12 @@ function backup(file) {
   const to = `${file}.amr-backup`;
   if (!fs.existsSync(to)) fs.copyFileSync(file, to);
 }
+
+const HOOK_ENTRIES = [
+  ['sessionStart', 'context'],
+  ['sessionEnd', 'sync'],
+  ['sessionEnd', 'dream --if-stale 7 --fix'],
+];
 
 function mergeHooksJson(file, entries) {
   let cfg = { hooks: {}, version: 1 };
@@ -119,14 +135,16 @@ function mergeHooksJson(file, entries) {
   }
   cfg.hooks ||= {};
   const added = [];
-  for (const [event, command] of entries) {
+  for (const [event, sub] of entries) {
     cfg.hooks[event] ||= [];
     const already = cfg.hooks[event].some(
-      (e) => typeof e?.command === 'string' && e.command.includes('amr')
+      (e) =>
+        typeof e?.command === 'string' &&
+        e.command.includes(`amr.mjs" ${sub}`)
     );
     if (!already) {
-      cfg.hooks[event].push({ command });
-      added.push(event);
+      cfg.hooks[event].push({ command: hookCmd(sub) });
+      added.push(`${event}:${sub}`);
     }
   }
   if (added.length) {
@@ -148,18 +166,20 @@ function mergeClaudeSettings(file, entries) {
   }
   cfg.hooks ||= {};
   const added = [];
-  for (const [event, command] of entries) {
+  for (const [event, sub] of entries) {
     cfg.hooks[event] ||= [];
     const already = cfg.hooks[event].some((e) =>
       (e?.hooks || []).some(
-        (h) => typeof h?.command === 'string' && h.command.includes('amr')
+        (h) =>
+          typeof h?.command === 'string' &&
+          h.command.includes(`amr.mjs" ${sub}`)
       )
     );
     if (!already) {
       cfg.hooks[event].push({
-        hooks: [{ type: 'command', command }],
+        hooks: [{ type: 'command', command: hookCmd(sub) }],
       });
-      added.push(event);
+      added.push(`${event}:${sub}`);
     }
   }
   if (added.length) {
@@ -221,10 +241,7 @@ export function cmdInstall(flags) {
     try {
       if (h.hooksJson) {
         const file = h.hooksJson();
-        const added = mergeHooksJson(file, [
-          ['sessionStart', hookCmd('context')],
-          ['sessionEnd', hookCmd('sync')],
-        ]);
+        const added = mergeHooksJson(file, HOOK_ENTRIES);
         did.push(
           added.length
             ? `hooks +${added.join(',')} in ${file}`
@@ -233,10 +250,10 @@ export function cmdInstall(flags) {
       }
       if (h.settingsJson) {
         const file = h.settingsJson();
-        const added = mergeClaudeSettings(file, [
-          ['SessionStart', hookCmd('context')],
-          ['SessionEnd', hookCmd('sync')],
-        ]);
+        const added = mergeClaudeSettings(
+          file,
+          HOOK_ENTRIES.map(([e, s]) => [e[0].toUpperCase() + e.slice(1), s])
+        );
         did.push(
           added.length
             ? `hooks +${added.join(',')} in ${file}`

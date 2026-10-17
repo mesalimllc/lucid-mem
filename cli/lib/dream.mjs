@@ -129,9 +129,31 @@ export function analyze(home, { staleDays = 90 } = {}) {
   };
 }
 
+function lastDreamAt(home) {
+  const stamp = path.join(home, '.git', 'amr.lastdream');
+  if (fs.existsSync(stamp)) return fs.statSync(stamp).mtimeMs;
+  const log = git(home, ['log', '-1', '--format=%ct', '--grep=^Dream:']);
+  return log.code === 0 && log.stdout ? parseInt(log.stdout, 10) * 1000 : 0;
+}
+
+function touchDream(home) {
+  fs.writeFileSync(
+    path.join(home, '.git', 'amr.lastdream'),
+    new Date().toISOString()
+  );
+}
+
 export function cmdDream(flags) {
   const home = ensureRepo();
   const staleDays = parseInt(flags.days ?? '90', 10);
+
+  // --if-stale N: run only when the last dream is older than N days
+  if (flags['if-stale'] !== undefined) {
+    const minAge = parseInt(flags['if-stale'] || '7', 10);
+    const ageDays = (Date.now() - lastDreamAt(home)) / 864e5;
+    if (ageDays < minAge) return; // recently dreamt; stay quiet (hook-safe)
+  }
+
   const report = analyze(home, { staleDays });
 
   if (flags.json) {
@@ -159,6 +181,7 @@ export function cmdDream(flags) {
     out(`  entries missing 'added:' date: ${report.entriesWithoutDate}`);
 
   if (!flags.fix) {
+    touchDream(home);
     out('');
     out('run `amr dream --fix` for mechanical cleanup (index, dead links, exact dups); semantic merging needs an agent — see dreams/DREAMER.md');
     return;
@@ -224,6 +247,7 @@ export function cmdDream(flags) {
   if (touched.has('MEMORY.md'))
     fs.writeFileSync(memPath, memLines.join('\n').replace(/\n{3,}/g, '\n\n'));
 
+  touchDream(home);
   if (!changed.length) return out('nothing mechanical to fix');
   commit(home, [...touched], 'Dream: mechanical cleanup');
   changed.forEach((c) => out(`  ${c}`));

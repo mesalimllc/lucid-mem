@@ -24,6 +24,14 @@ const SOURCES = [
     ext: ['.jsonl', '.json', '.md'],
   },
   {
+    host: 'codex',
+    roots: [
+      path.join(home, '.codex', 'sessions'),
+      path.join(home, '.codex', 'archived_sessions'),
+    ],
+    ext: ['.jsonl', '.json'],
+  },
+  {
     host: 'copilot',
     roots: [path.join(home, '.copilot', 'chats')],
     ext: ['.json', '.jsonl', '.md', ''],
