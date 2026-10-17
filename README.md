@@ -2,298 +2,153 @@
 
 Agents work better when they remember things across sessions. With Agent Memory Repo, your agent saves what it learns from you in real time, and that memory is live across sessions. Memories link to each other, so your agent navigates them like a wiki.
 
-The spec is also published at [cognition.com/agent-memory-repo](https://cognition.com/agent-memory-repo).
+**This fork ships a working autonomy layer, not just the spec.** The `amr` CLI wires itself into 13 agent hosts so memory is retrieved at session start, saved while the agent works, synced through git, and maintained by scheduled dreaming , with no manual invocation. See `agentmemoryharness-plan.md` for the design.
 
-## Try with your agent
+## Quick start
 
-### Give your next session a memory.
-
-Save a trial preference, then ask for it in a new session. Your memory lives in a separate repo, never in the public spec repository.
-
-For this local trial, use the same machine with persistent storage. Cloud sessions or another machine need a private remote or other persistent storage to carry memory across sessions.
-
-### 1. Install the skill
-
-**Devin CLI.** Run this in your terminal, then start a new Devin session. ([Installation guide](https://docs.devin.ai/cli/extensibility/plugins/overview))
+Requires Node.js and git.
 
 ```sh
-devin plugins install AgentMemoryRepo/agentmemoryrepo
+cd cli && npm link          # puts `amr` on PATH
+amr ensure                  # create the memory repo (default ~/agent-memory, override with $AMR_HOME)
+amr install                 # wire every detected host (rules + hooks + MCP)
+amr doctor                  # verify everything
 ```
 
-**Claude Code, Cursor & others.** Run this from your project and choose your agent in the installer. Requires Node.js and Git. Restart your agent if needed. ([Installation guide](https://github.com/vercel-labs/skills#install-a-skill))
+Then start a session in any wired host. Memory appears in context automatically. To try it manually:
 
 ```sh
-npx skills add AgentMemoryRepo/agentmemoryrepo --skill agent-memory-repo
+amr context                 # print what a session in this directory would see
+amr add "I prefer concise bullet-point summaries"
 ```
 
-### 2. Save a memory
+Point the memory repo at a **private** remote you own to make it durable and multi-machine:
 
-Send this to your agent. It will create the repo, save an entry, and commit it.
-
-First session:
-
-```text
-Use the agent-memory-repo skill to set up a separate local memory repo for this trial. Save this trial preference: I prefer concise bullet-point summaries. Do not configure a remote. Tell me the full path to the memory repo so I can reuse it next session.
+```sh
+amr remote set git@github.com:you/your-memory.git
+amr sync
 ```
 
-### 3. Start a new session
+## What autonomy means here
 
-Use the same project and machine, and replace the placeholder with the path your agent gave you. The new session should retrieve the saved preference from the repo.
+The two directions of memory use different mechanisms:
 
-Next session:
+- **Retrieve is deterministic.** Session-start hooks (Cursor, Claude Code, Windsurf) run `amr context` and inject the digest. Other hosts get the same result through always-on rules + MCP. No model judgment involved.
+- **Save is judgment-based.** A hook can't decide what is durable, so every host carries a rules block that teaches the agent to call `amr add` when it learns something lasting. The retrieved context itself ends with a one-line affordance reminding the agent how.
+- **Maintenance is scheduled.** Session-end hooks and OS-scheduled tasks run `amr dream` to dedupe, archive overflow, and keep `MEMORY.md` small, mostly invisibly, with a moon flipbook when it runs inside a live session.
 
-```text
-Use the agent-memory-repo skill with the memory repo at <paste the full path from the previous session>. What trial preference did I save?
+A `sessionEnd` hook commits and pushes anything `amr` left dirty, so nothing is lost if the agent forgets to save mid-task.
+
+## Commands
+
+| Command | What it does |
+|---|---|
+| `amr ensure` | Idempotent init: `git init`, `MEMORY.md`, first commit. Never touches global git config. |
+| `amr context [dir]` | Session-start digest: global bullets + this repo's project memory + linked projects. `--full` for the uncapped version, `--also a,b` to attach extra projects. |
+| `amr add "text"` | Save a memory. `--project` routes to this repo's file, `--file topic` to a topic file, `--kind` adds metadata. Refuses secret-shaped input (`--allow-secret` overrides). |
+| `amr update "match" "text"` | Replace an entry in place, preserving its metadata. Errors on 0 or >1 matches. |
+| `amr search "term"` | Grep all memory files, including the archive. |
+| `amr index` | Rebuild the `## Index` section of `MEMORY.md` from files on disk. |
+| `amr link <name...> [--for <p>]` | Auto-attach other repos' memory to a repo's sessions (transitive). |
+| `amr unlink <name...> [--for <p>]` | Remove links. |
+| `amr policy [name key bool]` | Per-repo policy: `noglobal` (skip global memory), `private` (details below). No args = list all. |
+| `amr remote [set <url>]` | Show or set the memory repo's git remote. Private repos only. |
+| `amr sync` | `pull --rebase --autostash` + `push`. No-op without a remote. |
+| `amr doctor` | Repo health, PATH, per-host wiring, dead `amr.json` keys. |
+| `amr dream` | Memory health report. `--fix` dedupes and cleans, `--compact` archives overflow past `--keep N` (default 25), `--if-stale N` no-ops if a dream ran recently. `--inline` prints a transcript-safe moon flipbook; `--spin` demos it. |
+| `amr harvest` | List recent agent transcripts across hosts. `--extract` streams normalized user messages (`--days N --max N --min C --json`). |
+| `amr discover` | Rank repos by transcript mentions, show memory coverage (seeded/MISSING), suggest links from co-mention evidence. |
+| `amr install [--host a,b\|all]` | Wire rules, hooks, and MCP into detected hosts. Idempotent; backs up every file it touches. |
+| `amr serve` | stdio MCP server: `memory_context`, `memory_add`, `memory_search`, `memory_update`. |
+
+## Host wiring
+
+`amr install` merges, never clobbers, into each detected host, backing up to `*.amr-backup` first. Report shows `wired (rules+mcp)`, `(rules only)`, or `(mcp only)`.
+
+| Host | Rules | Hooks | MCP |
+|---|---|---|---|
+| Cursor | `.cursor/rules/agent-memory-repo.mdc` | `sessionStart`/`sessionEnd` | `mcp.json` |
+| Claude Code | `~/.claude/CLAUDE.md` | `SessionStart`/`SessionEnd` | `~/.claude.json` |
+| Windsurf | `global_rules.md` | `sessionStart`/`sessionEnd` | `mcp_config.json` |
+| Devin CLI | `devin/AGENTS.md` | - | - |
+| Copilot CLI | `~/.copilot/AGENTS.md` | - | - |
+| Codex | `~/.codex/AGENTS.md` | - | `config.toml` |
+| Cline | `~/Documents/Cline/Rules/`, `~/.cline/AGENTS.md` | - | `~/.cline/mcp.json` |
+| Muse | `SOUL.md` | - | - |
+| Claude Desktop | - | - | `claude_desktop_config.json` |
+| Antigravity | `~/.gemini/GEMINI.md` | - | `mcp_config.json` |
+| OpenCode | `~/.config/opencode/AGENTS.md` | - | `opencode.json` (`mcp` schema) |
+| CommandCode | `~/.commandcode/AGENTS.md` | - | `mcp.json` |
+| Freebuff | `~/.freebuff/AGENTS.md`, `manicode/AGENTS.md` | - | - (manifest-managed registry) |
+
+Rules-only hosts rely on the agent reading its global instruction file each session; standard behavior for those CLIs. MCP is additive where hooks exist; for Claude Desktop it is the only channel.
+
+## Multi-repo memory
+
+One memory repo serves every project. Project files live at `projects/<name>-<hash>.md`, where the hash is 6 chars of SHA-1 over the origin remote URL (falling back to the repo path). Two clones of one remote share memory; two unrelated repos with the same name don't collide.
+
+- `amr context` injects **global + current project + linked projects**, capped at 5 project files, with linked projects getting smaller digests.
+- `amr link trackdub-gated` inside `Trackdub` makes gated's memory appear whenever a session runs in Trackdub. Links are directional and transitive; `--for <p>` links on another repo's behalf.
+- `private` means **unreachable transitively**: direct links and explicit `--also` attach it; it refuses when reached through another repo's links. Context prints a `<!-- omitted by private policy -->` marker instead of dropping silently.
+- `noglobal` keeps a repo's sessions free of global memory.
+- Unknown link targets surface as `<!-- unresolved -->` markers, and `amr doctor` flags dead `amr.json` keys.
+
+## Transcript intelligence
+
+`amr harvest` and `amr discover` read local transcript stores (claude, codex, devin, muse, cline, copilot, cursor, commandcode, freebuff/manicode) to tell you where memory is missing:
+
+```sh
+amr discover          # hot repos without memory + suggested links
+amr harvest --extract # normalized user messages for mining
 ```
 
-The memory repo stays local; no remote is configured by this trial. Invoke the skill when you want to use memory. Automatic startup and scheduled Dreaming are not included.
+Discovery dedupes by remote identity, ignores transcript files that mention >5 repos (listing dumps), and only suggests links backed by co-mention evidence. Extracted messages pass through a noise filter that strips instruction injections, tool-result blobs, and fetch output, and secret-shaped text is refused at `amr add` regardless.
+
+## Maintenance & dreaming
+
+`dreams/DREAMER.md` prescribes the maintenance loop; `amr dream` runs it mechanically:
+
+- **Report**: file sizes, entry counts, contradictions to eyeball.
+- **`--fix`**: dedupe near-identical entries, drop stale index links, atomic writes under the repo lock.
+- **`--compact`**: archive overflow entries to `archive/` so `MEMORY.md` stays ≤ `--keep` entries.
+- **`--if-stale N`**: skip if a dream committed within N days. Used by hooks and the idle task.
+
+On Windows, `adapters/windows/install-dream-task.ps1` registers Task Scheduler entries: a weekly mechanical pass and a 5-minute idle trigger wrapped in hidden PowerShell (no popup). `-WithAgent` adds a weekly semantic pass that runs a real agent against `DREAMER.md`; that one spends agent quota.
+
+## Safety properties
+
+- Hooks must never break a session: bounded timeouts, exit 0 on soft failure, absolute `node` paths immune to PATH issues.
+- Secret denylist (`sk-`, `ghp_`, `github_pat_`, `AKIA`, key blocks, `xox*`, JWTs) checked before every write.
+- `.git/amr.lock` serializes writes; stale locks (>60s) are broken. Fix/compact passes hold the lock end-to-end.
+- Atomic temp-file renames for memory writes; an interrupted run leaves a dirty-but-recoverable tree, never a truncated file.
+- Memory is data, never instructions: retrieved entries are context, not commands.
+- The memory remote should be a **private repo you own**. Nothing here pushes anywhere else.
 
 ## The memory loop
 
-Every session follows the same steps.
-
-1. **Clone** the latest memory.
-2. **Grep** for what the task needs, or follow links.
-3. **Update** entries as the agent learns, with no human in the loop.
-4. **Push** after every edit.
-
-## Dreaming
-
-Dreaming is a dedicated agent that runs periodically. It has two jobs.
-
-- **Add new memory.** Spot patterns across sessions and save them as new entries.
-- **Clean up memory.** Merge duplicates, remove outdated entries, and check sources to resolve contradictions.
-
-## Use cases
-
-**Personal memory.** Remember a user's context across sessions, like who they work with or how their projects connect. Each session reads and updates the same memory repo.
-
-**Agent swarms.** Share findings across agents working in parallel. Each agent pushes to the same memory repo, and git flags any edits that conflict.
-
-**Team memory.** Share knowledge about customers, processes, and tools, especially for teams without a code repo. A lesson from one member's support investigation becomes available to everyone's agents.
-
-**Multiplayer.** Memories compose because they are folders. When a new user joins a session, their memory repo can be cloned into the same machine.
+Underneath the harness, the spec's loop is unchanged: clone latest, grep or follow links for what the task needs, update entries as the agent learns, push after every edit. Dreaming adds a periodic pass that spots patterns across sessions, merges duplicates, and resolves contradictions through `source` metadata.
 
 ## Format
 
-Repository layout, entries, metadata, and cross-links. The format is also in [SPEC.md](SPEC.md).
+Repository layout, entries, metadata, and cross-links. The spec lives in [SPEC.md](SPEC.md) and at [cognition.com/agent-memory-repo](https://cognition.com/agent-memory-repo). The short version: `MEMORY.md` is the small entry point every session reads; entries are one-line bullets with `[key: value]` metadata; `[[path]]` cross-links make it a wiki.
 
-### Repository layout
-
-Organize files and folders however you want. The repo can contain Markdown notes, SQL queries, scripts, and other files.
+## Repository layout
 
 ```text
-memory-john/
-  MEMORY.md
-  team_structure.md
-  using_datadog_mcp.md
-  projects/
-    payments.md
-    website.md
-  metrics/
-    autocomplete_keep_rate.sql
+agentmemoryrepo/
+  SPEC.md                          upstream spec (format only)
+  agentmemoryharness-plan.md       autonomy design doc
+  cli/                             amr   zero-dependency Node CLI
+  adapters/
+    shared/rule-block.md           canonical instruction block stamped into hosts
+    windows/install-dream-task.ps1 Task Scheduler dream tasks
+  dreams/DREAMER.md                maintenance workflow for the dreaming agent
+  skills/agent-memory-repo/SKILL.md manual-ops fallback skill
 ```
-
-### MEMORY.md
-
-`MEMORY.md` is the entry point to the repo. Agents load it at the start of every session, so keep it short: include only what every session needs, plus links to everything else.
-
-`MEMORY.md`:
-
-```markdown
-# Memory: John
-
-- John leads the product team [source: https://example.com/sessions/100]
-
-## Index
-- [[team_structure]]
-- [[projects/payments]]
-- [[projects/website]]
-```
-
-### Entries and metadata
-
-In Markdown notes, each entry is a bullet on one line, with optional metadata at the end. Update or remove entries when the information changes.
-
-```markdown
-- John coordinates the billing launch [source: https://example.com/sessions/101]
-- Payments and website share a 2026-10-15 launch deadline [source: https://example.com/sessions/102; added: 2026-09-03]
-```
-
-Metadata uses `[key: value; key: value]`. Keys are open. Recommended keys:
-
-- `source`: a link to the agent session where the information was learned.
-- `added`: when it was saved, as `YYYY-MM-DD`.
-
-### Cross-links
-
-Use `[[path]]` to link between files. Paths start at the memory root. Omit `.md` for Markdown files; keep other extensions, as in `[[metrics/autocomplete_keep_rate.sql]]`. Keep information in one place and link to it elsewhere. Update links when moving or renaming files.
-
-```markdown
-- Priya owns pricing for the billing launch; see [[team_structure]].
-```
-
-## Composability
-
-A session can load several memory repos at once. For example, Alice starts a session with her memory. When Bob joins, the agent clones his memory into the same machine.
-
-```text
-1. Alice starts a session
-
-vm/
-└── memory-alice/        ← cloned at session start
-    ├── MEMORY.md
-    └── …
-
-2. Bob joins the session
-
-vm/
-├── memory-alice/
-│   ├── MEMORY.md
-│   └── …
-└── memory-bob/          ← cloned when Bob joins
-    ├── MEMORY.md
-    └── …
-```
-
-Once Bob's repo is in the machine, the agent reads both `MEMORY.md` files and follows links as needed. Bob's memory is cloned only if he chooses to share it with the session.
-
-The repos stay separate. The agent tracks who said what and writes each memory to the right repo: Alice's preferences go to `memory-alice/`, and Bob's go to `memory-bob/`. When the destination is unclear, the agent asks.
-
-Because each repo keeps its own ownership, permissions, and history, future sessions can combine them in any mix.
-
-<details>
-<summary><strong>Example: reusing a saved SQL query</strong></summary>
-
-Suppose John asks: "Did last week's release hurt autocomplete?"
-
-This is a new session. The agent has no chat history with John. It reads `MEMORY.md` first and finds this entry:
-
-`MEMORY.md`:
-
-```markdown
-- Autocomplete is called ghost_text in code and events. Searching events for "autocomplete" returns nothing. [[metrics/autocomplete_keep_rate.sql]] gives the share of shown suggestions the user accepted and kept for 30 seconds, which is how the team measures the feature [source: https://example.com/sessions/105]
-```
-
-It follows the link to the saved query:
-
-`metrics/autocomplete_keep_rate.sql`:
-
-```sql
-SELECT date(created_at) AS day,
-  COUNT(*) FILTER (WHERE name = 'ghost_text_kept') * 1.0
-  / COUNT(*) FILTER (WHERE name = 'ghost_text_shown')
-    AS keep_rate
-FROM events
-WHERE name IN ('ghost_text_shown', 'ghost_text_kept')
-  AND created_at > now() - interval '30 days'
-GROUP BY day
-ORDER BY day;
-```
-
-The agent runs it and answers John: the keep rate fell from 31% to 24% on the day of the release. John did not explain what the feature is called in the code or how the team measures it.
-
-A week earlier, this was harder. John asked how autocomplete was doing, and the agent reported that nobody used it. John had to point it to `ghost_text` in the editor code. Its next answer counted every suggestion shown, and John had to explain that the team counts only the ones a user keeps. The agent saved what it learned.
-
-This time, John asked once.
-
-</details>
-
-<details>
-<summary><strong>Example: a swarm solves a slow checkout</strong></summary>
-
-Checkout is fast for most users: the median request takes 80 ms. But 1 request in 100 takes 2.4 seconds, and nobody knows why. John asks an agent to find out. The agent starts four agents, one each for the database, the runtime, the cache, and the load balancer. First it makes a folder for the swarm in John's memory repo:
-
-```text
-memory-john/
-  MEMORY.md
-  team_structure.md
-  projects/
-    payments.md
-    website.md
-  swarms/
-    slow-checkout/         ← one folder per swarm
-      README.md            ← the goal and the rules
-      findings.md          ← what each agent has measured
-      questions.md         ← agents ask each other
-      agents/
-        database.md        ← one notes file per agent
-        runtime.md
-        cache.md
-        load_balancer.md
-      scripts/
-        bench.sh           ← the one benchmark every agent runs
-```
-
-The `README.md` tells every agent how to use the folder:
-
-`swarms/slow-checkout/README.md`:
-
-```markdown
-# Swarm: why is checkout slow for 1 request in 100?
-
-- Median is 80 ms. The slowest 1% take 2.4 s. The goal is under 500 ms [source: https://example.com/sessions/300]
-- Measure only with [[swarms/slow-checkout/scripts/bench.sh]], so numbers compare
-- Before each step, pull and read findings and questions
-- Write what you measure in findings, including what you rule out
-- If another agent's area might explain what you see, ask in questions
-```
-
-Each agent clones the repo and digs into its own area. After an hour, `findings.md` holds three facts. None of them explains the problem:
-
-`swarms/slow-checkout/findings.md`:
-
-```markdown
-- Database: queries are fast. But in bursts, requests wait up to 2 s for a free connection [source: https://example.com/sessions/301]
-- Runtime: garbage collection freezes the server for about 400 ms, once every 10 seconds [source: https://example.com/sessions/302]
-- Load balancer: ruled out. The slow requests stay slow with it bypassed [source: https://example.com/sessions/303]
-```
-
-The runtime agent cannot see why memory fills up on a 10-second beat. It asks the swarm. So does the database agent:
-
-`swarms/slow-checkout/questions.md`:
-
-```markdown
-- Runtime asks: does anything run every 10 seconds and use a lot of memory? [source: https://example.com/sessions/302]
-  - Cache answers: yes. The price cache refresh runs every 10 seconds and rebuilds the whole price table, about 2 GB [source: https://example.com/sessions/304]
-- Database asks: when exactly are the freezes? My bursts are also 10 seconds apart [source: https://example.com/sessions/301]
-  - Runtime answers: at :03, :13, :23 of each minute. Your bursts start within 50 ms of each one [source: https://example.com/sessions/302]
-```
-
-Now the three facts connect, and the database agent writes the cause:
-
-`swarms/slow-checkout/findings.md`:
-
-```markdown
-- Cause: the price cache refresh rebuilds a 2 GB table every 10 seconds. That triggers a 400 ms freeze. Requests pile up during the freeze, then all ask for a database connection at once, and the pool of 20 runs out [source: https://example.com/sessions/301] [source: https://example.com/sessions/302] [source: https://example.com/sessions/304]
-- Fix: refresh only the prices that changed. The slowest 1% drop from 2.4 s to 310 ms on bench.sh [source: https://example.com/sessions/304]
-```
-
-No agent could have found this alone. The cache agent saw nothing wrong with its refresh. The database agent saw waits with no cause. The runtime agent saw freezes with no source.
-
-All four agents write to the same two files the whole time. Git merges most of their commits. When two agents edit the same line, git rejects the second push, and that agent reads both versions before writing one.
-
-When the swarm finishes, the first agent adds one line to the index in `MEMORY.md`:
-
-`MEMORY.md`:
-
-```markdown
-## Index
-- [[team_structure]]
-- [[projects/payments]]
-- [[projects/website]]
-- [[swarms/slow-checkout/README]]
-```
-
-The folder stays in the repo. When John later asks why search is slow, that session follows the link, reuses `bench.sh`, and checks for freezes first.
-
-</details>
 
 ## Open development
 
-Agent Memory Repo was originally developed by Cognition and released as an open standard. It is open to contributions from the broader ecosystem.
-
-Propose changes and follow the discussion in the [GitHub repository](https://github.com/AgentMemoryRepo/agentmemoryrepo).
+Agent Memory Repo was originally developed by Cognition and released as an open standard. This fork adds the autonomous harness on top. Propose spec changes upstream at [AgentMemoryRepo/agentmemoryrepo](https://github.com/AgentMemoryRepo/agentmemoryrepo).
 
 ## License
 
