@@ -32,6 +32,44 @@ test('install --host bogus errors and lists valid hosts', () => {
   assert.match(r.stdout + r.stderr, /bogus/);
 });
 
+test('uninstall removes only amr wiring and preserves user config', () => {
+  const home = tmpdir();
+  const fakeHome = tmpdir();
+  run(['ensure'], { amrHome: home });
+  // codex with pre-existing user config
+  const codexDir = path.join(fakeHome, '.codex');
+  fs.mkdirSync(codexDir, { recursive: true });
+  fs.writeFileSync(path.join(codexDir, 'config.toml'), 'model = "o4-mini"\n');
+  // cursor with a foreign hook that must survive
+  const cursorDir = path.join(fakeHome, '.cursor');
+  fs.mkdirSync(cursorDir, { recursive: true });
+  const cursorHooks = path.join(cursorDir, 'hooks.json');
+  fs.writeFileSync(
+    cursorHooks,
+    JSON.stringify({
+      version: 1,
+      hooks: { sessionStart: [{ command: 'echo user-hook' }] },
+    })
+  );
+
+  run(['install', '--host', 'codex,cursor'], { amrHome: home, fakeHome });
+  assert.match(read(path.join(codexDir, 'config.toml')), /mcp_servers\.agent-memory/);
+  assert.match(read(cursorHooks), /amr\.mjs/);
+
+  const r = run(['uninstall', '--host', 'codex,cursor'], { amrHome: home, fakeHome });
+  assert.equal(r.status, 0, r.stderr);
+
+  // ours removed
+  assert.ok(!fs.existsSync(path.join(codexDir, 'AGENTS.md'))); // file was entirely ours
+  const toml = read(path.join(codexDir, 'config.toml'));
+  assert.ok(!toml.includes('mcp_servers.agent-memory'));
+  const hooks = JSON.parse(read(cursorHooks));
+  // theirs preserved
+  assert.ok(toml.includes('o4-mini'));
+  assert.ok(hooks.hooks.sessionStart.some((h) => h.command === 'echo user-hook'));
+  assert.ok(!JSON.stringify(hooks).includes('amr.mjs'));
+});
+
 test('install --host codex writes rules + mcp into a fake home, idempotent', () => {
   const home = tmpdir();
   const fakeHome = tmpdir();

@@ -540,6 +540,165 @@ export function cmdInstall(flags) {
   out('verify with: amr doctor');
 }
 
+// ---------- uninstall ----------
+
+const isAmrCmd = (c) => typeof c === 'string' && c.includes('amr.mjs');
+
+function unmergeHooksJson(file) {
+  if (!fs.existsSync(file)) return false;
+  let cfg;
+  try {
+    cfg = JSON.parse(fs.readFileSync(file, 'utf8'));
+  } catch {
+    return false;
+  }
+  if (!cfg.hooks) return false;
+  let changed = false;
+  for (const [ev, list] of Object.entries(cfg.hooks)) {
+    const kept = list.filter((e) => !isAmrCmd(e?.command));
+    if (kept.length !== list.length) changed = true;
+    if (kept.length) cfg.hooks[ev] = kept;
+    else delete cfg.hooks[ev];
+  }
+  if (!Object.keys(cfg.hooks).length) delete cfg.hooks;
+  if (changed) {
+    backup(file);
+    fs.writeFileSync(file, JSON.stringify(cfg, null, 2) + '\n');
+  }
+  return changed;
+}
+
+function unmergeClaudeSettings(file) {
+  if (!fs.existsSync(file)) return false;
+  let cfg;
+  try {
+    cfg = JSON.parse(fs.readFileSync(file, 'utf8'));
+  } catch {
+    return false;
+  }
+  if (!cfg.hooks) return false;
+  let changed = false;
+  for (const [ev, list] of Object.entries(cfg.hooks)) {
+    const kept = list
+      .map((e) => ({
+        ...e,
+        hooks: (e?.hooks || []).filter((h) => !isAmrCmd(h?.command)),
+      }))
+      .filter((e) => (e.hooks || []).length || !Array.isArray(e?.hooks));
+    if (JSON.stringify(kept) !== JSON.stringify(list)) changed = true;
+    if (kept.length) cfg.hooks[ev] = kept;
+    else delete cfg.hooks[ev];
+  }
+  if (!Object.keys(cfg.hooks).length) delete cfg.hooks;
+  if (changed) {
+    backup(file);
+    fs.writeFileSync(file, JSON.stringify(cfg, null, 2) + '\n');
+  }
+  return changed;
+}
+
+function unmergeMcpJson(file) {
+  if (!fs.existsSync(file)) return false;
+  let cfg;
+  try {
+    cfg = JSON.parse(fs.readFileSync(file, 'utf8'));
+  } catch {
+    return false;
+  }
+  if (!cfg.mcpServers?.['agent-memory']) return false;
+  delete cfg.mcpServers['agent-memory'];
+  if (!Object.keys(cfg.mcpServers).length) delete cfg.mcpServers;
+  backup(file);
+  fs.writeFileSync(file, JSON.stringify(cfg, null, 2) + '\n');
+  return true;
+}
+
+function unmergeMcpToml(file) {
+  if (!fs.existsSync(file)) return false;
+  const text = fs.readFileSync(file, 'utf8');
+  const next = text.replace(
+    /\n*\[mcp_servers\.agent-memory\]\n(?:[^[]*)?/,
+    '\n'
+  );
+  if (next === text) return false;
+  backup(file);
+  fs.writeFileSync(file, next);
+  return true;
+}
+
+function unmergeMcpOpencode(file) {
+  if (!fs.existsSync(file)) return false;
+  const text = fs.readFileSync(file, 'utf8');
+  let cfg;
+  try {
+    cfg = JSON.parse(text);
+  } catch {
+    return false; // .jsonc we never managed to write anyway
+  }
+  if (!cfg.mcp?.['agent-memory']) return false;
+  delete cfg.mcp['agent-memory'];
+  if (!Object.keys(cfg.mcp).length) delete cfg.mcp;
+  backup(file);
+  fs.writeFileSync(file, JSON.stringify(cfg, null, 2) + '\n');
+  return true;
+}
+
+function unstampRules(file) {
+  if (!fs.existsSync(file)) return 'absent';
+  const text = fs.readFileSync(file, 'utf8');
+  if (!text.includes(MARK_BEGIN)) return 'absent';
+  const re = new RegExp(`\\n*${MARK_BEGIN}[\\s\\S]*?${MARK_END}\\n?`, 'm');
+  const next = text.replace(re, '\n').replace(/\n{3,}/g, '\n\n');
+  // If only whitespace or a lone yaml frontmatter husk remains (e.g.
+  // a wrapper file we created), the file was entirely ours — delete it.
+  if (!next.replace(/^---\s*\n[\s\S]*?\n---/, '').trim()) {
+    fs.rmSync(file);
+    return 'removed (file deleted)';
+  }
+  backup(file);
+  fs.writeFileSync(file, next);
+  return 'removed';
+}
+
+export function cmdUninstall(flags) {
+  const requested = flags.host
+    ? String(flags.host).split(',').map((s) => s.trim())
+    : null;
+  const names = Object.keys(HOSTS).filter((n) =>
+    requested ? requested.includes('all') || requested.includes(n) : HOSTS[n].detect()
+  );
+  if (!names.length) {
+    out('no known agent hosts detected; nothing to remove');
+    return;
+  }
+  for (const name of names) {
+    const h = HOSTS[name];
+    const did = [];
+    try {
+      if (h.hooksJson && unmergeHooksJson(h.hooksJson()))
+        did.push(`hooks removed from ${h.hooksJson()}`);
+      if (h.settingsJson && unmergeClaudeSettings(h.settingsJson()))
+        did.push(`hooks removed from ${h.settingsJson()}`);
+      if (h.rules) {
+        for (const r of h.rules()) {
+          const res = unstampRules(r.path);
+          if (res !== 'absent') did.push(`rules ${res}: ${r.path}`);
+        }
+      }
+      if (h.mcpJson && unmergeMcpJson(h.mcpJson()))
+        did.push(`mcp entry removed from ${h.mcpJson()}`);
+      if (h.mcpToml && unmergeMcpToml(h.mcpToml()))
+        did.push(`mcp entry removed from ${h.mcpToml()}`);
+      if (h.mcpOpencode && unmergeMcpOpencode(h.mcpOpencode()))
+        did.push(`mcp entry removed from ${h.mcpOpencode()}`);
+    } catch (e) {
+      err(`${name}: ${e.message}`);
+      continue;
+    }
+    out(`${name}: ${did.length ? did.join('; ') : 'nothing wired'}`);
+  }
+}
+
 function hostWired(name) {
   const h = HOSTS[name];
   if (!h.detect()) return 'not installed';

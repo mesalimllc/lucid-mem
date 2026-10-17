@@ -1,3 +1,6 @@
+import fs from 'node:fs';
+import path from 'node:path';
+import { fileURLToPath } from 'node:url';
 import {
   cmdAdd,
   cmdContext,
@@ -14,7 +17,7 @@ import {
 import { cmdDiscover } from './discover.mjs';
 import { cmdDream } from './dream.mjs';
 import { cmdHarvest } from './harvest.mjs';
-import { cmdDoctor, cmdInstall } from './install.mjs';
+import { cmdDoctor, cmdInstall, cmdUninstall } from './install.mjs';
 import { cmdServe } from './serve.mjs';
 
 const USAGE = `amr: agent memory CLI (lucid-mem)
@@ -37,6 +40,7 @@ usage: amr <command> [args] [flags]
   harvest [--days N] [--json] [--extract] [--max N] [--min C]   list transcripts; --extract streams normalized user messages
   discover [--days N] [--min N] [--json]   rank repos by transcript mentions; shows memory coverage + suggested links
   install [--host a,b|all]      wire hooks + rules + MCP into detected agent hosts
+  uninstall [--host a,b|all]    remove amr hooks + rules + MCP entries
   serve                         stdio MCP server (memory_context/add/search/update)
 
 flags:
@@ -125,10 +129,19 @@ export function main(argv) {
         return cmdDiscover(flags);
       case 'install':
         return cmdInstall(flags);
+      case 'uninstall':
+        return cmdUninstall(flags);
       case 'version':
       case '--version':
-      case '-v':
-        return process.stdout.write('amr 0.1.0\n');
+      case '-v': {
+        const pkg = JSON.parse(
+          fs.readFileSync(
+            path.join(path.dirname(fileURLToPath(import.meta.url)), '..', 'package.json'),
+            'utf8'
+          )
+        );
+        return process.stdout.write(`amr ${pkg.version}\n`);
+      }
       case 'help':
       case '--help':
       case '-h':

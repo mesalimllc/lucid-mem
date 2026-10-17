@@ -59,6 +59,7 @@ A `sessionEnd` hook commits and pushes anything `amr` left dirty, so nothing is 
 | `amr harvest` | List recent agent transcripts across hosts. `--extract` streams normalized user messages (`--days N --max N --min C --json`). |
 | `amr discover` | Rank repos by transcript mentions, show memory coverage (seeded/MISSING), suggest links from co-mention evidence. |
 | `amr install [--host a,b\|all]` | Wire rules, hooks, and MCP into detected hosts. Idempotent; backs up every file it touches. |
+| `amr uninstall [--host a,b\|all]` | Reverse of install: strips amr hooks, rules blocks, and MCP entries while preserving your other config. |
 | `amr serve` | stdio MCP server: `memory_context`, `memory_add`, `memory_search`, `memory_update`. |
 
 ## Host wiring
@@ -113,7 +114,7 @@ Discovery dedupes by remote identity, ignores transcript files that mention >5 r
 - **`--compact`**: archive overflow entries to `archive/` so `MEMORY.md` stays ≤ `--keep` entries.
 - **`--if-stale N`**: skip if a dream committed within N days. Used by hooks and the idle task.
 
-On Windows, `adapters/windows/install-dream-task.ps1` registers Task Scheduler entries: a weekly mechanical pass and a 5-minute idle trigger wrapped in hidden PowerShell (no popup). `-WithAgent` adds a weekly semantic pass that runs a real agent against `DREAMER.md`; that one spends agent quota.
+On Windows, `adapters/windows/install-dream-task.ps1` registers Task Scheduler entries: a weekly mechanical pass and a 5-minute idle trigger wrapped in hidden PowerShell (no popup). `-WithAgent` adds a weekly semantic pass that runs a real agent against `DREAMER.md`; that one spends agent quota. On macOS/Linux, `adapters/posix/install-dream.sh` installs the equivalent as systemd user timers (or cron entries): weekly `--fix --compact` plus a daily `--if-stale 1` catch-up, since POSIX schedulers have no idle trigger.
 
 ## Safety properties
 
@@ -142,6 +143,7 @@ lucid-mem/
   adapters/
     shared/rule-block.md           canonical instruction block stamped into hosts
     windows/install-dream-task.ps1 Task Scheduler dream tasks
+    posix/install-dream.sh         systemd/cron dream schedules
   dreams/DREAMER.md                maintenance workflow for the dreaming agent
   skills/agent-memory-repo/SKILL.md manual-ops fallback skill
 ```
