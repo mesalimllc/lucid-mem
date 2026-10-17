@@ -10,6 +10,23 @@ import {
 const out = (s = '') => process.stdout.write(s + '\n');
 const err = (s) => process.stderr.write(s + '\n');
 
+// Interactive-only moon-phase spinner (stderr, so stdout stays clean).
+const FRAMES = ['🌑', '🌒', '🌓', '🌔', '🌕', '🌖', '🌗', '🌘'];
+let spinTimer = null;
+let spinI = 0;
+const spinStart = (enabled) => {
+  if (!enabled || spinTimer) return;
+  spinTimer = setInterval(() => {
+    process.stderr.write(`\r${FRAMES[spinI++ % FRAMES.length]} dreaming…`);
+  }, 120);
+};
+const spinStop = () => {
+  if (!spinTimer) return;
+  clearInterval(spinTimer);
+  spinTimer = null;
+  process.stderr.write('\r\x1b[K');
+};
+
 // Write via temp+rename so a kill mid-write can never leave a
 // truncated memory file (Windows rename replaces the target).
 function atomicWrite(abs, data) {
@@ -168,12 +185,15 @@ export function cmdDream(flags) {
     if (ageDays < minAge) return; // recently dreamt; stay quiet (hook-safe)
   }
 
+  spinStart(process.stderr.isTTY && !flags.json);
+  try {
   const report = analyze(home, { staleDays });
 
   if (flags.json) {
     out(JSON.stringify(report, null, 2));
     return;
   }
+  spinStop();
 
   const s = report.stats;
   out(`dream report — ${home}`);
@@ -330,4 +350,7 @@ export function cmdDream(flags) {
   if (!ok) err('commit failed; fixes left uncommitted in working tree');
   };
   withLock(home, finish);
+  } finally {
+    spinStop();
+  }
 }
