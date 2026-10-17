@@ -209,3 +209,58 @@ export function hasRemote(repo) {
 export function pullFfOnly(repo, timeout = 2000) {
   return git(repo, ['pull', '--ff-only'], { timeout });
 }
+
+const CONFIG_REL = 'amr.json';
+
+export function loadConfig(repo) {
+  try {
+    const cfg = JSON.parse(
+      fs.readFileSync(path.join(repo, CONFIG_REL), 'utf8')
+    );
+    return cfg && typeof cfg === 'object' ? cfg : {};
+  } catch {
+    return {};
+  }
+}
+
+export function saveConfig(repo, cfg) {
+  fs.writeFileSync(
+    path.join(repo, CONFIG_REL),
+    JSON.stringify(cfg, null, 2) + '\n'
+  );
+}
+
+// Project files are projects/<name>-<hash>.md. A config key may be the
+// full slug or just the repo name (case-insensitive).
+export function listProjects(repo) {
+  const dir = path.join(repo, 'projects');
+  if (!fs.existsSync(dir)) return [];
+  return fs
+    .readdirSync(dir)
+    .filter((f) => f.endsWith('.md'))
+    .map((f) => {
+      const slug = f.slice(0, -3);
+      const dash = slug.lastIndexOf('-');
+      return { slug, name: dash > 0 ? slug.slice(0, dash) : slug };
+    })
+    .sort((a, b) => a.slug.localeCompare(b.slug));
+}
+
+export function resolveProjectSlug(repo, key) {
+  const k = String(key).toLowerCase().replace(/\.md$/, '');
+  const all = listProjects(repo);
+  const exact = all.find((p) => p.slug === k);
+  if (exact) return exact.slug;
+  const named = all.filter((p) => p.name === k);
+  return named[0]?.slug ?? null;
+}
+
+// Config entries may be keyed by slug or name (lowercase). Look up a
+// project's policy/link entry by either form.
+export function projectEntry(cfg, { slug, name }) {
+  const projects = cfg.projects || {};
+  for (const k of [slug, name && name.toLowerCase()]) {
+    if (k && projects[k]) return projects[k];
+  }
+  return null;
+}

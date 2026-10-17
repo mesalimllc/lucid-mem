@@ -3,9 +3,12 @@ import {
   cmdContext,
   cmdEnsure,
   cmdIndex,
+  cmdLink,
+  cmdPolicy,
   cmdRemote,
   cmdSearch,
   cmdSync,
+  cmdUnlink,
   cmdUpdate,
 } from './commands.mjs';
 import { cmdDream } from './dream.mjs';
@@ -23,6 +26,9 @@ usage: amr <command> [args] [flags]
   update "match" "text"         replace an existing entry in place
   search "term"                 grep all memory files
   index                         rebuild MEMORY.md index from files on disk
+  link <name...> [--for <p>]    auto-attach other repos' memories to this repo's sessions
+  unlink <name...> [--for <p>]  remove auto-attach links
+  policy [name key bool]        per-repo policy: noglobal, private (no args = list)
   remote [set <url>]            show or set the git remote (private repos only)
   sync                          pull --rebase + push (no-op without a remote)
   doctor                        check repo, PATH, and per-host wiring
@@ -32,7 +38,8 @@ usage: amr <command> [args] [flags]
   serve                         stdio MCP server (memory_context/add/search/update)
 
 flags:
-  --project                     scope the entry to the current git repo
+  --project [name]              scope the entry to the current repo, or a named project
+  --also a,b                    attach extra projects to the context digest
   --file <topic>                write to a topic file instead of MEMORY.md
   --kind <k>                    add kind metadata (preference|fact|decision|howto)
   --cwd <dir>                   resolve project/host context against this dir
@@ -96,6 +103,12 @@ export function main(argv) {
         return cmdIndex();
       case 'serve':
         return cmdServe();
+      case 'link':
+        return cmdLink(pos, flags);
+      case 'unlink':
+        return cmdUnlink(pos, flags);
+      case 'policy':
+        return cmdPolicy(pos);
       case 'remote':
         return cmdRemote(pos);
       case 'sync':

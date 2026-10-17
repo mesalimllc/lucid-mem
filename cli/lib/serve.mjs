@@ -46,9 +46,18 @@ const TOOLS = [
           description:
             'Working directory to resolve project-scoped memory against. Defaults to the server cwd.',
         },
+        also: {
+          type: 'array',
+          items: { type: 'string' },
+          description:
+            'Extra project names to attach to the digest ad hoc (beyond configured links).',
+        },
       },
     },
-    run: (a) => run(() => cmdContext({ cwd: a.directory })),
+    run: (a) =>
+      run(() =>
+        cmdContext({ cwd: a.directory, also: (a.also || []).join(',') })
+      ),
   },
   {
     name: 'memory_add',
@@ -59,9 +68,9 @@ const TOOLS = [
       properties: {
         text: { type: 'string', description: 'One-line memory entry' },
         project: {
-          type: 'boolean',
+          type: ['boolean', 'string'],
           description:
-            'Scope to the git repo of `directory` instead of global memory.',
+            'true scopes to the git repo of `directory`; a string scopes to a named project file (e.g. "trackdub").',
         },
         file: {
           type: 'string',
@@ -74,7 +83,7 @@ const TOOLS = [
     run: (a) =>
       run(() =>
         cmdAdd(a.text, {
-          project: !!a.project,
+          project: a.project ?? false,
           file: a.file,
           cwd: a.directory,
         })

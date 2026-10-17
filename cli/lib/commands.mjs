@@ -9,11 +9,16 @@ import {
   hasRemote,
   insertEntry,
   isMemoryRepo,
+  listProjects,
+  loadConfig,
   looksSecret,
+  projectEntry,
   projectFor,
   pullFfOnly,
   resolveHome,
+  resolveProjectSlug,
   sanitizeFile,
+  saveConfig,
   today,
   withLock,
 } from './core.mjs';
@@ -45,24 +50,50 @@ export function cmdContext(flags) {
           `- … ${arr.length - n} older entries omitted — run \`amr search "term"\` or \`amr context --full\``,
           ...arr.slice(-n),
         ];
-  const globalLines = cap(bullets(idxSplit[0] || ''), 25);
+  const cfg = loadConfig(home);
+  const entry = proj ? projectEntry(cfg, proj) : null;
+  // noglobal: this repo's sessions omit the global section.
+  const globalLines = entry?.noglobal
+    ? []
+    : cap(bullets(idxSplit[0] || ''), 25);
   const indexLinks = cap(bullets(idxSplit[1] || ''), 12);
 
-  let projectBody = '';
-  let projectHeader = '';
-  if (proj) {
-    const pf = path.join(home, 'projects', `${proj.slug}.md`);
-    if (fs.existsSync(pf)) {
-      projectBody = cap(bullets(fs.readFileSync(pf, 'utf8')), 25).join('\n');
-      projectHeader = `## Project: ${proj.name}`;
-    }
+  // Attach list: the current project, then its config links
+  // (transitive, deduped, max 5 total) and any --also names.
+  // private projects only ever load as the current project.
+  const bySlug = new Map(listProjects(home).map((p) => [p.slug, p]));
+  const attach = [];
+  const seen = new Set();
+  const push = (slug, linked) => {
+    if (seen.has(slug) || attach.length >= 5) return;
+    seen.add(slug);
+    attach.push({ slug, name: bySlug.get(slug)?.name || slug, linked });
+  };
+  if (proj) push(proj.slug, false);
+  const queue = [...(entry?.links || [])];
+  if (flags.also) queue.push(...String(flags.also).split(','));
+  while (queue.length && attach.length < 5) {
+    const key = String(queue.shift()).trim().toLowerCase();
+    if (!key) continue;
+    const slug = resolveProjectSlug(home, key);
+    if (!slug || seen.has(slug)) continue;
+    const e = projectEntry(cfg, { slug, name: key });
+    if (e?.private) continue;
+    push(slug, true);
+    if (e?.links) queue.push(...e.links);
   }
 
-  const lines = [`<agent-memory repo="${home}">`, '## Global'];
-  if (globalLines.length) lines.push(globalLines.join('\n'));
-  if (projectHeader) {
-    lines.push('', projectHeader);
-    if (projectBody) lines.push(projectBody);
+  const lines = [`<agent-memory repo="${home}">`];
+  if (globalLines.length) lines.push('## Global', globalLines.join('\n'));
+  for (const a of attach) {
+    const pf = path.join(home, 'projects', `${a.slug}.md`);
+    if (!fs.existsSync(pf)) continue;
+    const body = cap(
+      bullets(fs.readFileSync(pf, 'utf8')),
+      a.linked ? 12 : 25
+    ).join('\n');
+    lines.push('', `## Project: ${a.name}${a.linked ? ' (linked)' : ''}`);
+    if (body) lines.push(body);
   }
   if (indexLinks.length) lines.push('', '## Index', indexLinks.join('\n'));
   lines.push(
@@ -75,8 +106,19 @@ export function cmdContext(flags) {
 
 function targetFile(home, flags) {
   if (flags.project) {
-    const proj = projectFor(flags.cwd || process.cwd());
-    if (!proj) throw new Error('not inside a git repo; cannot use --project');
+    let proj;
+    if (flags.project === true) {
+      proj = projectFor(flags.cwd || process.cwd());
+      if (!proj)
+        throw new Error('not inside a git repo; cannot use --project');
+    } else {
+      const slug = resolveProjectSlug(home, flags.project);
+      if (!slug)
+        throw new Error(
+          `unknown project "${flags.project}" — cd into that repo and use --project to create its file`
+        );
+      proj = { slug, name: slug };
+    }
     return {
       rel: `projects/${proj.slug}.md`,
       abs: path.join(home, 'projects', `${proj.slug}.md`),
@@ -261,4 +303,89 @@ export function cmdSync() {
     return;
   }
   out('synced');
+}
+
+function setLinks(home, key, mutate) {
+  const cfg = loadConfig(home);
+  const projects = (cfg.projects ||= {});
+  const e = (projects[key] ||= {});
+  const before = e.links || [];
+  e.links = mutate(before);
+  if (!e.links.length) delete e.links;
+  if (!Object.keys(e).length) delete projects[key];
+  saveConfig(home, cfg);
+  commit(home, ['amr.json'], `Update project links: ${key}`);
+}
+
+function linkTarget(home, flags) {
+  if (flags.for) {
+    const slug = resolveProjectSlug(home, flags.for);
+    if (!slug) throw new Error(`unknown project "${flags.for}"`);
+    return slug;
+  }
+  const proj = projectFor(flags.cwd || process.cwd());
+  if (!proj)
+    throw new Error('not inside a git repo; use --for <project> instead');
+  return proj.slug;
+}
+
+export function cmdLink(names, flags) {
+  const home = ensureRepo();
+  if (!names.length) throw new Error('usage: amr link <project> [more…]');
+  const self = linkTarget(home, flags);
+  const keys = names.map((n) => String(n).toLowerCase());
+  setLinks(home, self, (l) => [...new Set([...l, ...keys])]);
+  out(`${self} links: ${keys.join(', ')}`);
+}
+
+export function cmdUnlink(names, flags) {
+  const home = ensureRepo();
+  if (!names.length) throw new Error('usage: amr unlink <project> [more…]');
+  const self = linkTarget(home, flags);
+  const keys = new Set(names.map((n) => String(n).toLowerCase()));
+  setLinks(home, self, (l) => l.filter((x) => !keys.has(x)));
+  out(`${self} unlinked: ${[...keys].join(', ')}`);
+}
+
+const POLICY_KEYS = new Set(['noglobal', 'private']);
+const BOOL = /^(true|1|on|yes)$/i;
+
+export function cmdPolicy(args) {
+  const home = ensureRepo();
+  const cfg = loadConfig(home);
+  if (!args.length) {
+    const projects = cfg.projects || {};
+    const rows = Object.entries(projects).flatMap(([k, e]) =>
+      [
+        e.links?.length ? `${k}: links -> ${e.links.join(', ')}` : null,
+        ...Object.keys(e)
+          .filter((pk) => pk !== 'links')
+          .map((pk) => `${k}: ${pk}=true`),
+      ].filter(Boolean)
+    );
+    return out(rows.length ? rows.join('\n') : 'no project links or policy');
+  }
+  const [name, key, value] = args;
+  if (!name || !key || value === undefined) {
+    err('usage: amr policy <project> <noglobal|private> <true|false>');
+    process.exitCode = 1;
+    return;
+  }
+  if (!POLICY_KEYS.has(key)) {
+    err(`unknown policy key "${key}" (allowed: ${[...POLICY_KEYS].join(', ')})`);
+    process.exitCode = 1;
+    return;
+  }
+  const cfgKey =
+    resolveProjectSlug(home, name) || String(name).toLowerCase();
+  const projects = (cfg.projects ||= {});
+  const e = (projects[cfgKey] ||= {});
+  if (BOOL.test(value)) e[key] = true;
+  else {
+    delete e[key];
+    if (!Object.keys(e).length) delete projects[cfgKey];
+  }
+  saveConfig(home, cfg);
+  commit(home, ['amr.json'], `Set policy ${cfgKey}.${key}=${BOOL.test(value)}`);
+  out(`${cfgKey}.${key} = ${BOOL.test(value)}`);
 }
