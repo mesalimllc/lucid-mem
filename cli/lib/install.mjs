@@ -41,40 +41,50 @@ const appdata = process.env.APPDATA || path.join(home, 'AppData', 'Roaming');
 
 const firstExisting = (paths) => paths.find((p) => fs.existsSync(p));
 
+const localappdata =
+  process.env.LOCALAPPDATA || path.join(home, 'AppData', 'Local');
+const documents = path.join(home, 'Documents');
+
 const HOSTS = {
   cursor: {
     detect: () => fs.existsSync(path.join(home, '.cursor')),
     hooksJson: () => path.join(home, '.cursor', 'hooks.json'),
-    rules: () => ({
-      path: path.join(home, '.cursor', 'rules', 'agent-memory-repo.mdc'),
-      content: RULE_FILE_WRAPPER,
-      append: false,
-    }),
+    rules: () => [
+      {
+        path: path.join(home, '.cursor', 'rules', 'agent-memory-repo.mdc'),
+        content: RULE_FILE_WRAPPER,
+        append: false,
+      },
+    ],
   },
   claude: {
     detect: () => fs.existsSync(path.join(home, '.claude')),
     settingsJson: () => path.join(home, '.claude', 'settings.json'),
-    rules: () => ({
-      path: path.join(home, '.claude', 'CLAUDE.md'),
-      content: RULE_BLOCK,
-      append: true,
-    }),
+    rules: () => [
+      {
+        path: path.join(home, '.claude', 'CLAUDE.md'),
+        content: RULE_BLOCK,
+        append: true,
+      },
+    ],
   },
   windsurf: {
     detect: () => fs.existsSync(path.join(home, '.codeium', 'windsurf')),
     hooksJson: () =>
       path.join(home, '.codeium', 'windsurf', 'hooks.json'),
-    rules: () => ({
-      path: path.join(
-        home,
-        '.codeium',
-        'windsurf',
-        'memories',
-        'global_rules.md'
-      ),
-      content: RULE_BLOCK,
-      append: true,
-    }),
+    rules: () => [
+      {
+        path: path.join(
+          home,
+          '.codeium',
+          'windsurf',
+          'memories',
+          'global_rules.md'
+        ),
+        content: RULE_BLOCK,
+        append: true,
+      },
+    ],
   },
   devin: {
     detect: () =>
@@ -82,33 +92,74 @@ const HOSTS = {
         path.join(appdata, 'devin'),
         path.join(home, '.config', 'devin'),
       ]),
-    rules: () => ({
-      path:
-        firstExisting([
-          path.join(appdata, 'devin', 'AGENTS.md'),
-          path.join(home, '.config', 'devin', 'AGENTS.md'),
-        ]) || path.join(appdata, 'devin', 'AGENTS.md'),
-      content: RULE_BLOCK,
-      append: true,
-    }),
+    rules: () => [
+      {
+        path:
+          firstExisting([
+            path.join(appdata, 'devin', 'AGENTS.md'),
+            path.join(home, '.config', 'devin', 'AGENTS.md'),
+          ]) || path.join(appdata, 'devin', 'AGENTS.md'),
+        content: RULE_BLOCK,
+        append: true,
+      },
+    ],
   },
   copilot: {
     detect: () => fs.existsSync(path.join(home, '.copilot')),
-    rules: () => ({
-      path: path.join(home, '.copilot', 'AGENTS.md'),
-      content: RULE_BLOCK,
-      append: true,
-    }),
+    rules: () => [
+      {
+        path: path.join(home, '.copilot', 'AGENTS.md'),
+        content: RULE_BLOCK,
+        append: true,
+      },
+    ],
   },
   codex: {
     // No session-start hook: config.toml `notify` is fire-and-forget,
     // single-slot, and can't inject context. AGENTS.md block only.
     detect: () => fs.existsSync(path.join(home, '.codex')),
-    rules: () => ({
-      path: path.join(home, '.codex', 'AGENTS.md'),
-      content: RULE_BLOCK,
-      append: true,
-    }),
+    rules: () => [
+      {
+        path: path.join(home, '.codex', 'AGENTS.md'),
+        content: RULE_BLOCK,
+        append: true,
+      },
+    ],
+  },
+  cline: {
+    // Cline global rules live in Documents/Cline/Rules; ~/.cline is the
+    // CLI data dir. Cline hooks are named executables in .clinerules/hooks
+    // — unverified for global scope, so rules-only for now.
+    detect: () => fs.existsSync(path.join(home, '.cline')),
+    rules: () => [
+      {
+        path: path.join(
+          documents,
+          'Cline',
+          'Rules',
+          'agent-memory-repo.md'
+        ),
+        content: RULE_BLOCK,
+        append: false,
+      },
+      {
+        path: path.join(home, '.cline', 'AGENTS.md'),
+        content: RULE_BLOCK,
+        append: true,
+      },
+    ],
+  },
+  muse: {
+    // Meta's muse-code CLI; hermes is its local runtime dir and SOUL.md
+    // is its global instructions file. `muse exec` is headless-capable.
+    detect: () => fs.existsSync(path.join(localappdata, 'hermes')),
+    rules: () => [
+      {
+        path: path.join(localappdata, 'hermes', 'SOUL.md'),
+        content: RULE_BLOCK,
+        append: true,
+      },
+    ],
   },
 };
 
@@ -262,9 +313,10 @@ export function cmdInstall(flags) {
         );
       }
       if (h.rules) {
-        const r = h.rules();
-        const res = stampBlock(r.path, r.content, { append: r.append });
-        did.push(`rules ${res}: ${r.path}`);
+        for (const r of h.rules()) {
+          const res = stampBlock(r.path, r.content, { append: r.append });
+          did.push(`rules ${res}: ${r.path}`);
+        }
       }
     } catch (e) {
       err(`${name}: ${e.message}`);
@@ -284,7 +336,8 @@ function hostWired(name) {
   try {
     if (h.hooksJson && has(h.hooksJson(), 'amr')) return 'wired';
     if (h.settingsJson && has(h.settingsJson(), 'amr')) return 'wired';
-    if (h.rules && has(h.rules().path, MARK_BEGIN)) return 'wired (rules only)';
+    if (h.rules && h.rules().some((r) => has(r.path, MARK_BEGIN)))
+      return 'wired (rules only)';
   } catch {}
   return 'not wired';
 }

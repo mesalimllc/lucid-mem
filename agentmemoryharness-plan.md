@@ -87,6 +87,9 @@ hook must never break or hang a session. Repo location: `$AMR_HOME`, default
 | Windsurf | `~/.codeium/windsurf/hooks.json` `sessionStart` (verify event names) | `~/.codeium/windsurf/memories/global_rules.md` block | `sessionEnd` equiv |
 | Devin CLI | settings hooks key unverified → `~/AppData/Roaming/devin/AGENTS.md` block instructs `amr context` at session start | same block | same block |
 | Copilot CLI | `~/.copilot/AGENTS.md` block | same block | — |
+| Codex CLI | `~/.codex/AGENTS.md` block (no injectable hook; `notify` is fire-and-forget) | same block | — |
+| Cline | `~/Documents/Cline/Rules/agent-memory-repo.md` + `~/.cline/AGENTS.md` block (global hooks unverified) | same blocks | — |
+| Muse (muse-code) | `~/AppData/Local/hermes/SOUL.md` block | same block | — |
 
 Hook commands use absolute `node "<cli>/amr.mjs"` paths — immune to PATH issues.
 Rule block references `amr` and notes the absolute fallback. Shared canonical block

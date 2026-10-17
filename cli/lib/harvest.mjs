@@ -6,6 +6,8 @@ const out = (s = '') => process.stdout.write(s + '\n');
 
 const home = os.homedir();
 const appdata = process.env.APPDATA || path.join(home, 'AppData', 'Roaming');
+const localappdata =
+  process.env.LOCALAPPDATA || path.join(home, 'AppData', 'Local');
 
 // Where each host keeps local session transcripts/summaries.
 // Mechanical enumeration only — an agent reads the content.
@@ -32,6 +34,22 @@ const SOURCES = [
     ext: ['.jsonl', '.json'],
   },
   {
+    host: 'cline',
+    roots: [
+      path.join(home, '.cline', 'tasks'),
+      path.join(home, '.cline', 'data'),
+    ],
+    ext: ['.jsonl', '.json', '.md'],
+  },
+  {
+    host: 'muse',
+    roots: [
+      path.join(localappdata, 'hermes', 'sessions'),
+      path.join(localappdata, 'hermes', 'terminal-sessions'),
+    ],
+    ext: ['.jsonl', '.json', '.md', ''],
+  },
+  {
     host: 'copilot',
     roots: [path.join(home, '.copilot', 'chats')],
     ext: ['.json', '.jsonl', '.md', ''],
@@ -43,7 +61,7 @@ const SOURCES = [
   },
 ];
 
-const MAX_FILES = 200;
+const MAX_PER_HOST = 100;
 
 export function cmdHarvest(flags) {
   const days = parseInt(flags.days ?? '7', 10);
@@ -53,10 +71,11 @@ export function cmdHarvest(flags) {
   const found = [];
 
   for (const src of SOURCES) {
+    let hostCount = 0;
     for (const root of src.roots) {
       if (!fs.existsSync(root)) continue;
       (function walk(dir) {
-        if (found.length >= MAX_FILES) return;
+        if (hostCount >= MAX_PER_HOST) return;
         let ents;
         try {
           ents = fs.readdirSync(dir, { withFileTypes: true });
@@ -64,7 +83,7 @@ export function cmdHarvest(flags) {
           return;
         }
         for (const e of ents) {
-          if (found.length >= MAX_FILES) return;
+          if (hostCount >= MAX_PER_HOST) return;
           const p = path.join(dir, e.name);
           if (e.isDirectory()) walk(p);
           else if (
@@ -73,13 +92,15 @@ export function cmdHarvest(flags) {
           ) {
             try {
               const st = fs.statSync(p);
-              if (st.mtimeMs >= since)
+              if (st.mtimeMs >= since) {
                 found.push({
                   host: src.host,
                   path: p,
                   mtime: st.mtime.toISOString(),
                   sizeKB: Math.round(st.size / 1024),
                 });
+                hostCount++;
+              }
             } catch {}
           }
         }
