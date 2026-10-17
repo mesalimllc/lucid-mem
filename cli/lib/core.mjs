@@ -24,8 +24,17 @@ export function sh(cmd, args, opts = {}) {
 
 export const git = (repo, args, opts) => sh('git', ['-C', repo, ...args], opts);
 
-const samePath = (a, b) =>
-  path.resolve(a).toLowerCase() === path.resolve(b).toLowerCase();
+// Canonicalize before comparing: git reports the long form of paths
+// while env vars may carry 8.3 aliases (RUNNER~1) or symlinks.
+const canon = (p) => {
+  const r = path.resolve(p);
+  try {
+    return fs.realpathSync(r);
+  } catch {
+    return r;
+  }
+};
+const samePath = (a, b) => canon(a).toLowerCase() === canon(b).toLowerCase();
 
 export function isMemoryRepo(dir) {
   if (!fs.existsSync(path.join(dir, 'MEMORY.md'))) return false;
