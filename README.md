@@ -2,7 +2,7 @@
 
 Agents work better when they remember things across sessions. lucid-mem implements the [Agent Memory Repo spec](https://cognition.com/agent-memory-repo) as an autonomous layer: your agent saves what it learns from you in real time, and that memory is live across sessions. Memories link to each other, so your agent navigates them like a wiki.
 
-The `amr` CLI wires itself into 13 agent hosts so memory is retrieved at session start, saved while the agent works, synced through git, and maintained by scheduled dreaming, with no manual invocation. See `agentmemoryharness-plan.md` for the design.
+The `amr` CLI wires itself into 13 agent hosts so memory is retrieved at session start, saved while the agent works, synced through git, and maintained by scheduled dreaming, with no manual invocation. See `lucid-mem-plan.md` for the design.
 
 ## Quick start
 
@@ -137,7 +137,7 @@ Repository layout, entries, metadata, and cross-links. The spec lives in [SPEC.m
 ```text
 lucid-mem/
   SPEC.md                          upstream spec (format only)
-  agentmemoryharness-plan.md       autonomy design doc
+  lucid-mem-plan.md       autonomy design doc
   cli/                             amr   zero-dependency Node CLI
   adapters/
     shared/rule-block.md           canonical instruction block stamped into hosts

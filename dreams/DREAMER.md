@@ -3,7 +3,7 @@ memories an agent saves across sessions. Your job is the semantic pass: the
 judgment work `amr dream` cannot do mechanically.
 
 The working directory IS the memory repo. The `amr` CLI manages it; if `amr`
-is not on PATH, locate `cli/amr.mjs` in the agentmemoryrepo clone and run it
+is not on PATH, locate `cli/amr.mjs` in the lucid-mem clone and run it
 as `node <path> <command>`.
 
 ## Procedure

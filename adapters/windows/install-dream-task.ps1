@@ -11,10 +11,13 @@
 # That spends Devin usage on a schedule and runs with --permission-mode smart;
 # only enable it if you're comfortable with that.
 
-param([switch]$WithAgent)
+param([switch]$WithAgent, [string]$RepoRoot)
 
-$AmrJs   = "B:\Dev\agentmemoryrepo\cli\amr.mjs"
-$Dreamer = "B:\Dev\agentmemoryrepo\dreams\DREAMER.md"
+# Default repo root = two levels up from this script (adapters/windows/).
+# Pass -RepoRoot if the clone lives somewhere else.
+if (-not $RepoRoot) { $RepoRoot = Split-Path (Split-Path $PSScriptRoot -Parent) -Parent }
+$AmrJs   = Join-Path $RepoRoot "cli\amr.mjs"
+$Dreamer = Join-Path $RepoRoot "dreams\DREAMER.md"
 $MemRepo = Join-Path $env:USERPROFILE "agent-memory"
 $Node    = (Get-Command node).Source
 $Pwsh    = "$PSHOME\powershell.exe"

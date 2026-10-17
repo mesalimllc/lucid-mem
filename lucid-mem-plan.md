@@ -56,7 +56,7 @@ lucid-mem/                           (this repo; spec lives upstream)
   adapters/shared/rule-block.md      canonical always-on instruction block
   skills/agent-memory-repo/SKILL.md  rewritten later: autonomous layer = default;
                                      skill = manual ops fallback
-  agentmemoryharness-plan.md         this file
+  lucid-mem-plan.md                  this file
 ```
 
 ## `amr` CLI spec
