@@ -4,9 +4,19 @@ import {
   commit,
   ensureRepo,
   git,
+  withLock,
 } from './core.mjs';
 
 const out = (s = '') => process.stdout.write(s + '\n');
+const err = (s) => process.stderr.write(s + '\n');
+
+// Write via temp+rename so a kill mid-write can never leave a
+// truncated memory file (Windows rename replaces the target).
+function atomicWrite(abs, data) {
+  const tmp = `${abs}.amr-tmp`;
+  fs.writeFileSync(tmp, data);
+  fs.renameSync(tmp, abs);
+}
 
 const bulletText = (line) =>
   line
@@ -193,6 +203,9 @@ export function cmdDream(flags) {
 
   const changed = [];
   const touched = new Set();
+  // Hold the repo lock for the whole fix+compact pass so a concurrent
+  // `amr add` can't interleave or lose an update mid-dream.
+  const finish = () => {
 
   // drop exact-duplicate bullets, keeping the first occurrence
   const seen = new Set();
@@ -213,7 +226,7 @@ export function cmdDream(flags) {
       keep.push(l);
     }
     if (removed) {
-      fs.writeFileSync(abs, keep.join('\n').replace(/\n{3,}/g, '\n\n'));
+      atomicWrite(abs, keep.join('\n').replace(/\n{3,}/g, '\n\n'));
       touched.add(rel);
       changed.push(`${rel}: removed ${removed} duplicate(s)`);
     }
@@ -249,7 +262,7 @@ export function cmdDream(flags) {
     changed.push(`indexed ${report.unindexedFiles.length} file(s)`);
   }
   if (touched.has('MEMORY.md'))
-    fs.writeFileSync(memPath, memLines.join('\n').replace(/\n{3,}/g, '\n\n'));
+    atomicWrite(memPath, memLines.join('\n').replace(/\n{3,}/g, '\n\n'));
 
   // --compact: archive oldest entries beyond the digest cap so live
   // files never exceed what `amr context` injects. Archive files stay
@@ -292,7 +305,7 @@ export function cmdDream(flags) {
         fs.writeFileSync(aabs, `# Archive: ${rel}\n\n`);
       }
       fs.appendFileSync(aabs, archived.join('\n') + '\n');
-      fs.writeFileSync(
+      atomicWrite(
         abs,
         lines
           .filter((_, i) => !move.has(i))
@@ -305,8 +318,16 @@ export function cmdDream(flags) {
     }
   }
 
-  touchDream(home);
-  if (!changed.length) return out('nothing mechanical to fix');
-  commit(home, [...touched], 'Dream: mechanical cleanup');
+  if (!changed.length) {
+    touchDream(home);
+    return out('nothing mechanical to fix');
+  }
+  const ok = commit(home, [...touched], 'Dream: mechanical cleanup');
+  // Stamp only after a successful commit — a failed/interrupted run
+  // must not count as dreamt for --if-stale.
+  if (ok) touchDream(home);
   changed.forEach((c) => out(`  ${c}`));
+  if (!ok) err('commit failed; fixes left uncommitted in working tree');
+  };
+  withLock(home, finish);
 }
