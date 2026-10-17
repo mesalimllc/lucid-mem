@@ -18,7 +18,7 @@ const USAGE = `amr — agent memory repo CLI
 usage: amr <command> [args] [flags]
 
   ensure                        create/verify the memory repo ($AMR_HOME, default ~/agent-memory)
-  context [dir]                 print session memory digest (global + current project)
+  context [dir]                 print session memory digest (global + current project, capped; --full for all)
   add "text"                    save a memory entry
   update "match" "text"         replace an existing entry in place
   search "term"                 grep all memory files
