@@ -56,6 +56,31 @@ export function cmdEnsure() {
   out(home);
 }
 
+// `amr reflect` — wired as a Claude Code Stop hook. The hook payload
+// arrives on stdin ({stop_hook_active, ...}). On the first natural stop
+// we block with a reflection question, giving the agent one turn to
+// save durable things it learned that the user never stated — the gap
+// transcript harvesting can't see by construction. On the block-induced
+// second stop (stop_hook_active) we print nothing and let it end.
+export function cmdReflect() {
+  let raw = '';
+  try {
+    raw = fs.readFileSync(0, 'utf8');
+  } catch {}
+  let p = {};
+  try {
+    p = JSON.parse(raw);
+  } catch {}
+  if (p.stop_hook_active) return;
+  out(
+    JSON.stringify({
+      decision: 'block',
+      reason:
+        'Before finishing: did you learn anything durable this session — a fact, decision, preference, root cause, or convention the user never explicitly stated? If yes, save each one now with `amr add "concise entry"` (use --project for repo-scoped memory). If nothing qualifies, end normally.',
+    })
+  );
+}
+
 export function cmdContext(flags) {
   const home = ensureRepo();
   if (hasRemote(home)) pullFfOnly(home, 2000);

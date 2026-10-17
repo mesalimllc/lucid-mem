@@ -17,7 +17,7 @@ export function tmpdir(prefix = 'amrtest-') {
 // Run the real CLI as a subprocess. Every test gets an isolated
 // AMR_HOME; fakeHome additionally redirects HOME/USERPROFILE for
 // adapters and harvest sources that resolve paths off the home dir.
-export function run(args, { cwd, amrHome, fakeHome, env } = {}) {
+export function run(args, { cwd, amrHome, fakeHome, env, input } = {}) {
   const e = {
     ...process.env,
     AMR_HOME: amrHome,
@@ -40,6 +40,7 @@ export function run(args, { cwd, amrHome, fakeHome, env } = {}) {
     encoding: 'utf8',
     cwd,
     env: e,
+    input,
     timeout: 30_000,
   });
   return { status: r.status ?? 1, stdout: r.stdout || '', stderr: r.stderr || '' };

@@ -15,8 +15,8 @@ const BACKENDS = {
   claude: {
     bin: 'claude',
     // --strict-mcp-config with an empty config skips MCP init,
-    // --model haiku is plenty for classification, --max-turns 1 keeps
-    // it to a single answer.
+    // --model haiku is plenty for classification. No --max-turns: a
+    // capped run that opens with a tool call ends error_max_turns.
     args: () => [
       '-p',
       '--output-format',
@@ -26,8 +26,6 @@ const BACKENDS = {
       '--strict-mcp-config',
       '--model',
       'haiku',
-      '--max-turns',
-      '1',
     ],
     extract: (r) => {
       try {
@@ -35,10 +33,17 @@ const BACKENDS = {
         // -p --output-format json emits an array of events (init,
         // assistant…, result) on newer versions, a single result
         // object on older ones.
-        const ev = Array.isArray(j)
-          ? j.findLast((e) => e?.type === 'result')
-          : j;
-        return ev?.result || null;
+        if (!Array.isArray(j)) return j?.result || null;
+        const ev = j.findLast((e) => e?.type === 'result');
+        if (ev?.result) return ev.result;
+        // Error results (error_max_turns etc.) carry no .result —
+        // fall back to the last assistant text the model produced.
+        const a = j.findLast((e) => e?.type === 'assistant');
+        const text = (a?.message?.content || [])
+          .filter((c) => c?.type === 'text')
+          .map((c) => c.text)
+          .join('\n');
+        return text || null;
       } catch {
         return r.stdout; // plain-text output
       }
@@ -130,7 +135,9 @@ export function runJudge(name, prompt) {
   } catch {
     return null;
   }
-  if (!r || r.error || r.status !== 0) return null;
+  // Exit code isn't authoritative — a run that ends error_max_turns
+  // still emits a usable event stream. Extraction decides.
+  if (!r || r.error) return null;
   try {
     const text = b.extract(r, outFile);
     return typeof text === 'string' && text.trim() ? text : null;

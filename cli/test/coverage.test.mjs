@@ -78,10 +78,10 @@ test('--judge env refines verdicts: prunes recall cues, catches paraphrase saves
   const judge = path.join(fakeHome, 'fake-judge.mjs');
   fs.writeFileSync(
     judge,
-    `let s='';process.stdin.on('data',d=>s+=d).on('end',()=>console.log(JSON.stringify({results:[
+    `let s='';process.stdin.on('data',d=>s+=d).on('end',()=>console.log(JSON.stringify({flagged:[
       {i:0,durable:true,covered:true},
       {i:1,durable:false,kind:'recall'}
-    ]})))`
+    ],unflagged:[]})))`
   );
   const r = run(['coverage', '--days', '7', '--no-log', '--judge', 'env'], {
     amrHome,
@@ -93,6 +93,55 @@ test('--judge env refines verdicts: prunes recall cues, catches paraphrase saves
   assert.match(r.stdout, /1\/1 durable signals covered — save rate 100%/);
   // Nothing missed → the queue is empty.
   assert.ok(!fs.existsSync(path.join(amrHome, 'dreams', 'pending-saves.md')));
+});
+
+test('judge samples the unflagged pool and extrapolates the miss rate', () => {
+  const { amrHome, fakeHome } = setup();
+  claudeJsonl(fakeHome, [
+    'we decided the cache TTL should always be 300 seconds', // flagged, unsaved
+    'ok cool, that approach works for me', // chatter — judge calls index 1 durable
+    'thanks, moving on to the next piece',
+    'sounds right to me, go ahead with it',
+  ]);
+  const judge = path.join(fakeHome, 'fake-judge.mjs');
+  fs.writeFileSync(
+    judge,
+    `let s='';process.stdin.on('data',d=>s+=d).on('end',()=>{
+      const i=JSON.parse(JSON.stringify(s));
+      console.log(JSON.stringify({flagged:[{i:0,durable:true,covered:false,proposal:'cache TTL is 300s'}],
+        unflagged:[{i:1,durable:true,covered:false,proposal:'deploys happen fridays'}]}))})`
+  );
+  const r = run(['coverage', '--days', '7', '--judge', 'env'], {
+    amrHome,
+    fakeHome,
+    env: { AMR_JUDGE_CMD: `node "${judge}"` },
+  });
+  assert.equal(r.status, 0, r.stderr);
+  assert.match(r.stdout, /unflagged sample: 1\/3 durable/);
+  assert.match(r.stdout, /adjusted save rate ≈ 0%/);
+  assert.match(r.stdout, /\(unflagged\)/);
+  const pending = read(path.join(amrHome, 'dreams', 'pending-saves.md'));
+  assert.match(pending, /deploys happen fridays/);
+});
+
+test('reflect blocks the first stop with a save reminder, allows the second', () => {
+  const { amrHome, fakeHome } = setup();
+  const r1 = run(['reflect'], {
+    amrHome,
+    fakeHome,
+    input: JSON.stringify({ session_id: 's1', stop_hook_active: false }),
+  });
+  assert.equal(r1.status, 0, r1.stderr);
+  const j = JSON.parse(r1.stdout);
+  assert.equal(j.decision, 'block');
+  assert.match(j.reason, /amr add/);
+  const r2 = run(['reflect'], {
+    amrHome,
+    fakeHome,
+    input: JSON.stringify({ session_id: 's1', stop_hook_active: true }),
+  });
+  assert.equal(r2.status, 0, r2.stderr);
+  assert.equal(r2.stdout, '');
 });
 
 test('a failing judge falls back to deterministic results', () => {

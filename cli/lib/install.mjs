@@ -489,10 +489,15 @@ export function cmdInstall(flags) {
       }
       if (h.settingsJson) {
         const file = h.settingsJson();
-        const added = mergeClaudeSettings(
-          file,
-          HOOK_ENTRIES.map(([e, s]) => [e[0].toUpperCase() + e.slice(1), s])
-        );
+        const added = mergeClaudeSettings(file, [
+          ...HOOK_ENTRIES.map(([e, s]) => [
+            e[0].toUpperCase() + e.slice(1),
+            s,
+          ]),
+          // Stop supports block-and-continue: `amr reflect` asks the
+          // session to save durable learnings the user never stated.
+          ['Stop', 'reflect'],
+        ]);
         did.push(
           added.length
             ? `hooks +${added.join(',')} in ${file}`

@@ -70,6 +70,22 @@ test('uninstall removes only amr wiring and preserves user config', () => {
   assert.ok(!JSON.stringify(hooks).includes('amr.mjs'));
 });
 
+test('install --host claude wires Stop→reflect alongside session hooks', () => {
+  const home = tmpdir();
+  const fakeHome = tmpdir();
+  run(['ensure'], { amrHome: home });
+  fs.mkdirSync(path.join(fakeHome, '.claude'), { recursive: true });
+  const r = run(['install', '--host', 'claude'], { amrHome: home, fakeHome });
+  assert.equal(r.status, 0, r.stderr);
+  const cfg = JSON.parse(read(path.join(fakeHome, '.claude', 'settings.json')));
+  const cmds = (ev) =>
+    (cfg.hooks?.[ev] || []).flatMap((e) => (e.hooks || []).map((h) => h.command));
+  assert.ok(cmds('SessionStart').some((c) => c.includes('amr.mjs" context')));
+  assert.ok(cmds('SessionEnd').some((c) => c.includes('coverage')));
+  const stops = cmds('Stop');
+  assert.ok(stops.some((c) => c.includes('amr.mjs" reflect')));
+});
+
 test('install --host codex writes rules + mcp into a fake home, idempotent', () => {
   const home = tmpdir();
   const fakeHome = tmpdir();

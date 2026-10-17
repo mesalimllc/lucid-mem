@@ -19,7 +19,7 @@ const WEAK = /\b(shipped|released|pinned|going with)\b/i;
 // annotations, agent-monologue steps (antigravity mixes them into the
 // user slot).
 const DUMP =
-  /^(error:|context summary|#|```|\{|\[|\/|\d+\s|\d+[:|]|[-\w./]+ total \d+|total \d+ |diff |--- |@@ |index |[MDAR] \S+\.\w+|response annotations|base directory|permission for this action|\[?system)/i;
+  /^(error:|context summary|#|```|\{|\[|\/|\d+\s|\d+[:|]|[-\w./]+ total \d+|total \d+ |diff |--- |@@ |index |[MDAR] \S+\.\w+|response annotations|base directory|permission for this action|stop hook feedback|hook feedback|\[?system)/i;
 const heavyMarkup = (t) =>
   (t.match(/[{}"|#*<>_=[\]\\`]/g) || []).length / t.length > 0.12;
 const FILE_REFS =
@@ -36,9 +36,12 @@ const isDump = (t) =>
   /(\d+ (files?|tests?) (passed|failed))|passed \(\d+\)|RUN v\d|✓/.test(t) ||
   /^(the user (is|asked|wants)|we (need|should|can|must|will)\b)/i.test(t) ||
   (t.match(FILE_REFS) || []).length >= 3;
-const isDurable = (t) =>
-  !isDump(t) &&
-  (STRONG.test(t) || (t.length < 200 && WEAK.test(t)));
+const flagged = (t) => STRONG.test(t) || (t.length < 200 && WEAK.test(t));
+const isDurable = (t) => !isDump(t) && flagged(t);
+// Unflagged-but-plausible: what the heuristic silently drops. A bounded
+// sample of this goes to the judge so the heuristic's false-negative
+// rate is measured instead of assumed.
+const isChatter = (t) => !isDump(t) && !flagged(t);
 
 const STOP = new Set(
   'the a an and or but with this that from into your you for are was were have has been not all can will would could should about when what which there their they them then than also just like over under more some any each other such only very make made does done here need want keep lets'.split(
@@ -119,31 +122,29 @@ const covered = (text, corpus) => {
 // deterministic candidate set, decide coverage semantically (paraphrase
 // saves the term-overlap check misses), and distill a proposed entry
 // per miss so pending review is approve/reject instead of rewrite.
-function judgePass(name, candidates, corpus) {
-  const list = candidates
-    .slice(0, 40)
-    .map(
-      (c, i) =>
-        `${i}\t[${c.host}] ${c.mtime.slice(0, 10)}\t${c.text
-          .slice(0, 300)
-          .replace(/\s+/g, ' ')}`
-    )
-    .join('\n');
+function judgePass(name, candidates, unflagged, corpus) {
+  const row = (c, i) =>
+    `${i}\t[${c.host}] ${c.mtime.slice(0, 10)}\t${c.text
+      .slice(0, 300)
+      .replace(/\s+/g, ' ')}`;
   const prompt = [
-    'You are judging save coverage for an agent memory system.',
+    'You are auditing save coverage for an agent memory system.',
     '',
-    'CANDIDATES — user statements from transcripts (index<TAB>[host] date<TAB>text):',
-    list,
+    'SECTION A — flagged candidates (index<TAB>[host] date<TAB>text):',
+    candidates.slice(0, 40).map(row).join('\n') || '(none)',
+    '',
+    'SECTION B — unflagged sample (the deterministic filter said these were NOT durable; catch its false negatives):',
+    unflagged.map(row).join('\n') || '(none)',
     '',
     'MEMORY — entries already saved:',
     corpus.join('\n') || '(empty)',
     '',
-    'For each index decide:',
+    'For every index in BOTH sections decide:',
     '- durable: it states a durable preference, decision, correction, rule, fact, or root cause worth persisting across sessions. Recall cues ("remember that?"), task chatter, status updates, and transient context are NOT durable.',
     '- covered: the durable content is already represented in MEMORY (paraphrase counts).',
     '- proposal: if durable and not covered, one concise memory entry suitable for `amr add`.',
     '',
-    'Reply with ONLY JSON: {"results":[{"i":0,"durable":true,"kind":"preference|decision|fact|rule|correction|other","covered":false,"proposal":"..."}]} — one entry per candidate index.',
+    'Reply with ONLY JSON: {"flagged":[{"i":0,"durable":true,"covered":false,"proposal":"..."}],"unflagged":[{"i":0,"durable":false}]} — one entry per index in each section.',
   ].join('\n');
   const text = runJudge(name, prompt);
   if (!text) return null;
@@ -152,7 +153,10 @@ function judgePass(name, candidates, corpus) {
   if (s < 0 || e <= s) return null;
   try {
     const r = JSON.parse(text.slice(s, e + 1));
-    return Array.isArray(r?.results) ? r.results : null;
+    return {
+      flagged: Array.isArray(r?.flagged) ? r.flagged : [],
+      unflagged: Array.isArray(r?.unflagged) ? r.unflagged : [],
+    };
   } catch {
     return null;
   }
@@ -187,12 +191,21 @@ export function cmdCoverage(flags) {
 
   const seen = new Set();
   const durable = [];
+  const chatter = [];
   for (const m of msgs) {
     const key = m.text.toLowerCase().replace(/\s+/g, ' ').trim();
-    if (seen.has(key) || !isDurable(m.text)) continue;
+    if (seen.has(key)) continue;
     seen.add(key);
-    durable.push({ ...m, covered: covered(m.text, corpus) });
+    if (isDurable(m.text))
+      durable.push({ ...m, covered: covered(m.text, corpus) });
+    else if (isChatter(m.text)) chatter.push(m);
   }
+  // Stratified sample of the unflagged pool — the judge checks it for
+  // false negatives so the metric measures heuristic recall, not just
+  // flagged-message coverage.
+  const step = Math.max(1, Math.floor(chatter.length / 30));
+  const sample = chatter.filter((_, i) => i % step === 0).slice(0, 30);
+  const unflaggedDurable = [];
 
   // Optional judge pass. AMR_NO_JUDGE is set on judge child processes so
   // a spawned host session's own hooks can't recurse into judging.
@@ -204,19 +217,53 @@ export function cmdCoverage(flags) {
         `note: --judge ${flags.judge === true ? '' : flags.judge + ' '}unavailable — deterministic results`
       );
     else {
-      const verdicts = judgePass(name, durable, corpusLines(home));
+      const verdicts = judgePass(name, durable, sample, corpusLines(home));
       if (verdicts === null)
         out(`note: judge ${name} failed — deterministic results`);
       else {
         judge = name;
-        applyVerdicts(durable, verdicts);
+        applyVerdicts(durable, verdicts.flagged);
+        const byIdx = new Map(verdicts.unflagged.map((v) => [v.i, v]));
+        for (let i = 0; i < sample.length; i++) {
+          const v = byIdx.get(i);
+          if (v?.durable !== true) continue;
+          unflaggedDurable.push({
+            ...sample[i],
+            unflagged: true,
+            covered: v.covered === true,
+            proposal:
+              typeof v.proposal === 'string' && v.proposal.trim()
+                ? v.proposal.trim().slice(0, 200)
+                : undefined,
+          });
+        }
       }
     }
   }
 
   const hits = durable.filter((d) => d.covered).length;
-  const missed = durable.filter((d) => !d.covered);
+  const missed = [
+    ...durable.filter((d) => !d.covered),
+    ...unflaggedDurable.filter((d) => !d.covered),
+  ];
   const rate = durable.length ? Math.round((hits / durable.length) * 100) : null;
+  // Extrapolate the sample to the whole chatter pool for an adjusted
+  // estimate of the true save rate.
+  const ufCovered = unflaggedDurable.filter((d) => d.covered).length;
+  const estDurable =
+    sample.length && judge
+      ? durable.length +
+        Math.round((chatter.length * unflaggedDurable.length) / sample.length)
+      : null;
+  const estRate =
+    estDurable !== null && estDurable > 0
+      ? Math.round(
+          (100 *
+            (hits +
+              Math.round((chatter.length * ufCovered) / sample.length))) /
+            estDurable
+        )
+      : null;
 
   // The queue the next session reviews: misses become candidates in
   // `amr context`, drain when saved, and age out with the window.
@@ -254,9 +301,19 @@ export function cmdCoverage(flags) {
           durable: durable.length,
           covered: hits,
           rate,
+          unflagged: judge
+            ? {
+                pool: chatter.length,
+                sampled: sample.length,
+                durable: unflaggedDurable.length,
+                covered: ufCovered,
+              }
+            : null,
+          estRate,
           missed: missed.map((m) => ({
             host: m.host,
             date: m.mtime.slice(0, 10),
+            unflagged: !!m.unflagged,
             text: m.text.slice(0, 300),
             proposal: m.proposal || null,
           })),
@@ -266,15 +323,21 @@ export function cmdCoverage(flags) {
       )
     );
 
-  if (!durable.length)
+  if (!durable.length && !missed.length)
     return out(`no durable signals found in ${found.length} transcript(s), ${days}d`);
   out(
-    `coverage (${days}d${judge ? `, judge:${judge}` : ''}): ${hits}/${durable.length} durable signals covered — save rate ${rate}%`
+    `coverage (${days}d${judge ? `, judge:${judge}` : ''}): ${hits}/${durable.length} durable signals covered — save rate ${rate === null ? 'n/a' : rate + '%'}`
   );
+  if (judge && sample.length)
+    out(
+      `unflagged sample: ${unflaggedDurable.length}/${sample.length} durable (pool ${chatter.length}) → adjusted save rate ≈ ${estRate}%`
+    );
   if (missed.length) {
     out('missed:');
     for (const m of missed.slice(0, 20))
-      out(`  [${m.host}] ${m.mtime.slice(0, 10)} ${m.text.slice(0, 140)}`);
+      out(
+        `  [${m.host}] ${m.mtime.slice(0, 10)}${m.unflagged ? ' (unflagged)' : ''} ${m.text.slice(0, 140)}`
+      );
     if (missed.length > 20) out(`  … +${missed.length - 20} more`);
   }
   out(
@@ -291,6 +354,10 @@ export function cmdCoverage(flags) {
       durable: durable.length,
       covered: hits,
       rate,
+      unflagged: judge
+        ? { pool: chatter.length, sampled: sample.length, durable: unflaggedDurable.length }
+        : null,
+      estRate,
     };
     withLock(home, () => {
       fs.mkdirSync(path.dirname(log), { recursive: true });

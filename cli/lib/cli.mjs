@@ -9,6 +9,7 @@ import {
   cmdLink,
   cmdPeer,
   cmdPolicy,
+  cmdReflect,
   cmdRemote,
   cmdSearch,
   cmdSync,
@@ -43,6 +44,7 @@ usage: amr <command> [args] [flags]
   harvest [--days N] [--json] [--extract] [--max N] [--min C]   list transcripts; --extract streams normalized user messages
   discover [--days N] [--min N] [--json]   rank repos by transcript mentions; shows memory coverage + suggested links
   coverage [--days N] [--json] [--no-log] [--judge claude|codex|env]  save-rate metric: durable transcript signals vs memory repo
+  reflect                       session-end reflection (wired as a Claude Stop hook; reads hook JSON on stdin)
   install [--host a,b|all]      wire hooks + rules + MCP into detected agent hosts
   uninstall [--host a,b|all]    remove amr hooks + rules + MCP entries
   serve                         stdio MCP server (memory_context/add/search/update)
@@ -75,8 +77,9 @@ function parseFlags(argv) {
 // Subcommands invoked by host session hooks. AMR_HOOKS_OFF is set on
 // processes amr spawns itself (the coverage judge) so a judge session's
 // own hooks don't pay for context/sync/dream/coverage on the way in
-// and out — that overhead dominated judge latency.
-const HOOK_CMDS = new Set(['context', 'sync', 'dream', 'coverage']);
+// and out — that overhead dominated judge latency — and so a judge
+// session's Stop event doesn't get hijacked by `reflect` mid-answer.
+const HOOK_CMDS = new Set(['context', 'sync', 'dream', 'coverage', 'reflect']);
 
 export function main(argv) {
   const [cmd, ...rest] = argv;
@@ -142,6 +145,8 @@ export function main(argv) {
         return cmdDiscover(flags);
       case 'coverage':
         return cmdCoverage(flags);
+      case 'reflect':
+        return cmdReflect();
       case 'install':
         return cmdInstall(flags);
       case 'uninstall':
