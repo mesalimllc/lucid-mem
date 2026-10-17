@@ -8,6 +8,8 @@ import {
   cmdSync,
   cmdUpdate,
 } from './commands.mjs';
+import { cmdDream } from './dream.mjs';
+import { cmdHarvest } from './harvest.mjs';
 import { cmdDoctor, cmdInstall } from './install.mjs';
 
 const USAGE = `amr — agent memory repo CLI
@@ -23,6 +25,8 @@ usage: amr <command> [args] [flags]
   remote [set <url>]            show or set the git remote (private repos only)
   sync                          pull --rebase + push (no-op without a remote)
   doctor                        check repo, PATH, and per-host wiring
+  dream [--days N] [--fix] [--json]   report memory health; --fix applies mechanical cleanup
+  harvest [--days N] [--json]   list recent session transcripts across agent hosts
   install [--host a,b|all]      wire hooks + rules into detected agent hosts
 
 flags:
@@ -94,6 +98,10 @@ export function main(argv) {
         return cmdSync();
       case 'doctor':
         return cmdDoctor();
+      case 'dream':
+        return cmdDream(flags);
+      case 'harvest':
+        return cmdHarvest(flags);
       case 'install':
         return cmdInstall(flags);
       case 'version':
