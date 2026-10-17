@@ -11,6 +11,7 @@ import {
   cmdUnlink,
   cmdUpdate,
 } from './commands.mjs';
+import { cmdDiscover } from './discover.mjs';
 import { cmdDream } from './dream.mjs';
 import { cmdHarvest } from './harvest.mjs';
 import { cmdDoctor, cmdInstall } from './install.mjs';
@@ -34,6 +35,7 @@ usage: amr <command> [args] [flags]
   doctor                        check repo, PATH, and per-host wiring
   dream [--days N] [--fix] [--compact] [--keep N] [--json]   memory health; --fix cleans up, --compact archives overflow; --spin plays the animation
   harvest [--days N] [--json] [--extract] [--max N] [--min C]   list transcripts; --extract streams normalized user messages
+  discover [--days N] [--min N] [--json]   rank repos by transcript mentions; shows memory coverage + suggested links
   install [--host a,b|all]      wire hooks + rules + MCP into detected agent hosts
   serve                         stdio MCP server (memory_context/add/search/update)
 
@@ -119,6 +121,8 @@ export function main(argv) {
         return cmdDream(flags);
       case 'harvest':
         return cmdHarvest(flags);
+      case 'discover':
+        return cmdDiscover(flags);
       case 'install':
         return cmdInstall(flags);
       case 'version':

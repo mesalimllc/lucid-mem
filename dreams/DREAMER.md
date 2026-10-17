@@ -17,6 +17,18 @@ as `node <path> <command>`.
    in full. Transcripts can contain secrets: `amr add` refuses
    secret-shaped text, but still never copy raw tokens or credentials.
    Skip entries that are only task-local or cheap to rediscover.
+0b. **Repo discovery.** Run `amr discover` — it ranks repos under the
+    configured scan roots by transcript mentions and marks which already
+    have memory (`seeded`) vs not (`MISSING`). For hot MISSING repos:
+    - `cd` into the repo and inspect its remote (`git remote get-url
+      origin`) plus README/package.json for a one-line identity.
+    - `amr add "<one-line identity>" --project` **from inside the repo** —
+      project slugs hash the remote URL, so adds run elsewhere land in a
+      different file that `amr context` will never load there.
+    - The `== suggested links ==` section lists repo pairs co-mentioned
+      in the same transcripts (listing dumps are excluded) — `cd` into
+      one and `amr link <sibling>` so sessions auto-attach the other.
+      Link sparingly: co-mention is evidence, not proof.
 1. Run `amr dream --json`. Read the report.
 2. Run `amr dream --fix --compact`. It applies the safe mechanical
    cleanups (exact duplicates, dead index links, unindexed files) and

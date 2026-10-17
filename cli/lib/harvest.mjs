@@ -191,13 +191,9 @@ const EXTRACT = {
 
 const MAX_PER_FILE = 50;
 
-export function cmdHarvest(flags) {
-  const days = parseInt(flags.days ?? '7', 10);
-  const since = flags.since
-    ? new Date(flags.since).getTime()
-    : Date.now() - days * 864e5;
+// Enumerate transcript files newer than `since` across all host roots.
+export function collectSessions(since) {
   const found = [];
-
   for (const src of SOURCES) {
     let hostCount = 0;
     for (const root of src.roots) {
@@ -235,33 +231,47 @@ export function cmdHarvest(flags) {
       })(root);
     }
   }
-
   found.sort((a, b) => (a.mtime < b.mtime ? 1 : -1));
+  return found;
+}
+
+// Normalize found transcript files to their user-message streams.
+export function extractMessages(found, { max = 200, min = 15 } = {}) {
+  const msgs = [];
+  for (const f of found) {
+    if (msgs.length >= max) break;
+    const ext = EXTRACT[f.host] || EXTRACT.generic;
+    let texts = [];
+    try {
+      texts = ext(f.path).slice(0, MAX_PER_FILE);
+    } catch {
+      continue;
+    }
+    const seenText = new Set();
+    for (const text of texts) {
+      if (seenText.has(text)) continue;
+      seenText.add(text);
+      if (msgs.length >= max) break;
+      if (text.length < min) continue;
+      msgs.push({ host: f.host, file: f.path, mtime: f.mtime, text });
+    }
+  }
+  return msgs;
+}
+
+export function cmdHarvest(flags) {
+  const days = parseInt(flags.days ?? '7', 10);
+  const since = flags.since
+    ? new Date(flags.since).getTime()
+    : Date.now() - days * 864e5;
+  const found = collectSessions(since);
 
   // --extract: normalize each file to its user-message stream.
   // Bounded: --max messages total (default 200), 500 chars each.
   if (flags.extract) {
     const max = parseInt(flags.max || '200', 10);
     const min = parseInt(flags.min || '15', 10);
-    const msgs = [];
-    for (const f of found) {
-      if (msgs.length >= max) break;
-      const ext = EXTRACT[f.host] || EXTRACT.generic;
-      let texts = [];
-      try {
-        texts = ext(f.path).slice(0, MAX_PER_FILE);
-      } catch {
-        continue;
-      }
-      const seenText = new Set();
-      for (const text of texts) {
-        if (seenText.has(text)) continue;
-        seenText.add(text);
-        if (msgs.length >= max) break;
-        if (text.length < min) continue;
-        msgs.push({ host: f.host, file: f.path, mtime: f.mtime, text });
-      }
-    }
+    const msgs = extractMessages(found, { max, min });
     if (flags.json) return out(JSON.stringify(msgs, null, 2));
     for (const m of msgs)
       out(

@@ -246,12 +246,23 @@ export function listProjects(repo) {
     .sort((a, b) => a.slug.localeCompare(b.slug));
 }
 
+// Config keys may be full slugs, slug-names, or raw repo basenames like
+// "api.trackdub" — normalize the same way projectFor names slugs so all
+// forms resolve.
+export const normName = (s) =>
+  String(s)
+    .toLowerCase()
+    .replace(/\.md$/, '')
+    .replace(/[^a-z0-9]+/g, '-')
+    .replace(/^-+|-+$/g, '');
+
 export function resolveProjectSlug(repo, key) {
   const k = String(key).toLowerCase().replace(/\.md$/, '');
+  const kn = normName(k);
   const all = listProjects(repo);
-  const exact = all.find((p) => p.slug === k);
+  const exact = all.find((p) => p.slug === k || p.slug === kn);
   if (exact) return exact.slug;
-  const named = all.filter((p) => p.name === k);
+  const named = all.filter((p) => p.name === kn || p.name === k);
   return named[0]?.slug ?? null;
 }
 
@@ -259,7 +270,7 @@ export function resolveProjectSlug(repo, key) {
 // project's policy/link entry by either form.
 export function projectEntry(cfg, { slug, name }) {
   const projects = cfg.projects || {};
-  for (const k of [slug, name && name.toLowerCase()]) {
+  for (const k of [slug, name && name.toLowerCase(), name && normName(name)]) {
     if (k && projects[k]) return projects[k];
   }
   return null;

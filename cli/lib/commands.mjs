@@ -12,6 +12,7 @@ import {
   listProjects,
   loadConfig,
   looksSecret,
+  normName,
   projectEntry,
   projectFor,
   pullFfOnly,
@@ -368,7 +369,16 @@ export function cmdLink(names, flags) {
   const home = ensureRepo();
   if (!names.length) throw new Error('usage: amr link <project> [more…]');
   const self = linkTarget(home, flags);
-  const keys = names.map((n) => String(n).toLowerCase());
+  const keys = [];
+  for (const n of names) {
+    const slug = resolveProjectSlug(home, n);
+    // Store resolved slugs when possible; raw names also resolve at
+    // context time, so storing them lets links point at not-yet-seeded
+    // projects that appear later.
+    keys.push(slug || String(n).toLowerCase());
+    if (!slug)
+      err(`note: no project file for "${n}" yet — link stored anyway`);
+  }
   setLinks(home, self, (l) => [...new Set([...l, ...keys])]);
   out(`${self} links: ${keys.join(', ')}`);
 }
@@ -377,9 +387,18 @@ export function cmdUnlink(names, flags) {
   const home = ensureRepo();
   if (!names.length) throw new Error('usage: amr unlink <project> [more…]');
   const self = linkTarget(home, flags);
-  const keys = new Set(names.map((n) => String(n).toLowerCase()));
-  setLinks(home, self, (l) => l.filter((x) => !keys.has(x)));
-  out(`${self} unlinked: ${[...keys].join(', ')}`);
+  // Remove by raw key, resolved slug, or normalized name — stored links
+  // from older versions used raw basenames.
+  const keys = new Set();
+  for (const n of names) {
+    const raw = String(n).toLowerCase();
+    keys.add(raw);
+    keys.add(normName(raw));
+    const slug = resolveProjectSlug(home, raw);
+    if (slug) keys.add(slug);
+  }
+  setLinks(home, self, (l) => l.filter((x) => !keys.has(x) && !keys.has(normName(x))));
+  out(`${self} unlinked: ${names.join(', ')}`);
 }
 
 const POLICY_KEYS = new Set(['noglobal', 'private']);
