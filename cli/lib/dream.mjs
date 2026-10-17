@@ -205,9 +205,17 @@ export function cmdDream(flags) {
     if (ageDays < minAge) return; // recently dreamt; stay quiet (hook-safe)
   }
 
-  spinStart(process.stderr.isTTY && !flags.json);
+  // --inline: printed moon frames instead of a live spinner — survives
+  // hook/tool-output capture and shows up inline in agent transcripts.
+  const ttySpin = process.stderr.isTTY && !flags.json && !flags.inline;
+  spinStart(ttySpin);
+  const moon = (suffix) => {
+    if (flags.inline && !flags.json)
+      err(`${FRAMES[spinI++ % FRAMES.length]} ${suffix}`);
+  };
   try {
   const report = analyze(home, { staleDays });
+  moon('dreaming…');
 
   if (flags.json) {
     out(JSON.stringify(report, null, 2));
@@ -240,6 +248,7 @@ export function cmdDream(flags) {
     return;
   }
 
+  moon('still dreaming…');
   const changed = [];
   const touched = new Set();
   // Hold the repo lock for the whole fix+compact pass so a concurrent
@@ -369,6 +378,7 @@ export function cmdDream(flags) {
   if (!ok) err('commit failed; fixes left uncommitted in working tree');
   };
   withLock(home, finish);
+  if (flags.inline && !flags.json) err('💤 dreamt.');
   } finally {
     spinDone();
   }
