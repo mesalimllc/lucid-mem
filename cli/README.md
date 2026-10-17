@@ -25,6 +25,7 @@ amr add "I prefer concise summaries"          # global memory
 amr add "uses Kokoro-82M for TTS" --project   # this repo's memory
 amr search "tts"
 amr link other-repo       # auto-attach another repo's memory to sessions here
+amr peer add <url>        # compose a teammate's memory repo into your context
 amr discover              # which hot repos still lack memory
 amr dream --fix --compact # dedupe + archive overflow
 ```

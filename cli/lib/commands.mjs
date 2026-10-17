@@ -27,6 +27,17 @@ import {
 const out = (s = '') => process.stdout.write(s + '\n');
 const err = (s) => process.stderr.write(s + '\n');
 
+// Peer memory repos (amr.json extraRepos): separate memory repos cloned
+// read-only next to AMR_HOME so teammates' memories compose into context
+// without merging repos. Never written to — sync only pulls them.
+const peerRoot = (home) =>
+  path.join(path.dirname(home), `${path.basename(home)}-peers`);
+const peerDir = (home, name) => path.join(peerRoot(home), name);
+const peerNameOf = (url) =>
+  normName(
+    path.basename(String(url).replace(/[\\/]+$/, '')).replace(/\.git$/i, '')
+  ) || 'peer';
+
 function mdFilesUnder(home, absDir) {
   const files = [];
   (function walk(dir) {
@@ -137,6 +148,40 @@ export function cmdContext(flags) {
     lines.push(
       '',
       `<!-- ${unknown.length} linked project name(s) unresolved (no memory file): ${unknown.join(', ')} -->`
+    );
+  // Peer repos: other memory repos attached via `amr peer add`. Each
+  // contributes its global digest plus its own copy of the current
+  // project's file — the multiplayer case (teammate memory for the
+  // same repo). Bounded: max 3 peers, 10 global + 8 project bullets.
+  const missingPeers = [];
+  for (const p of (cfg.extraRepos || []).slice(0, 3)) {
+    const dir = peerDir(home, p.name);
+    const pm = path.join(dir, 'MEMORY.md');
+    if (!fs.existsSync(pm)) {
+      missingPeers.push(p.name);
+      continue;
+    }
+    const g = cap(
+      bullets(
+        fs.readFileSync(pm, 'utf8').split(/^##\s+Index\s*$/m)[0] || ''
+      ),
+      10
+    );
+    if (g.length)
+      lines.push('', `## Peer: ${p.name} (read-only)`, g.join('\n'));
+    if (proj) {
+      const pf = path.join(dir, 'projects', `${proj.slug}.md`);
+      if (fs.existsSync(pf)) {
+        const pb = cap(bullets(fs.readFileSync(pf, 'utf8')), 8);
+        if (pb.length)
+          lines.push(`### ${p.name} memory for this project`, pb.join('\n'));
+      }
+    }
+  }
+  if (missingPeers.length)
+    lines.push(
+      '',
+      `<!-- configured peer(s) not cloned: ${missingPeers.join(', ')} — run amr peer -->`
     );
   // Recall pointer: archive/ holds compacted (oldest) entries —
   // searchable but never session-injected.
@@ -345,8 +390,80 @@ export function cmdRemote(args) {
   out(r.stdout || 'no remote configured');
 }
 
+export function cmdPeer(args, flags) {
+  const home = ensureRepo();
+  const cfg = loadConfig(home);
+  const peers = (cfg.extraRepos ||= []);
+  const [sub, ...rest] = args;
+
+  if (!sub) {
+    if (!peers.length)
+      return out('no peers configured — amr peer add <url-or-path>');
+    for (const p of peers) {
+      const dir = peerDir(home, p.name);
+      out(
+        `${p.name}: ${p.url} -> ${
+          fs.existsSync(dir) ? `${dir} (cloned)` : 'NOT CLONED'
+        }`
+      );
+    }
+    return;
+  }
+
+  if (sub === 'add') {
+    let url = rest[0];
+    if (!url)
+      throw new Error('usage: amr peer add <url-or-path> [--name x]');
+    // Bare local paths resolve against cwd, not the peer root.
+    if (!/^[a-z]+:\/\/|^git@|^ssh:/i.test(url)) url = path.resolve(url);
+    const name = normName(flags.name || peerNameOf(url));
+    if (peers.some((p) => p.name === name))
+      throw new Error(`peer "${name}" already configured`);
+    const dir = peerDir(home, name);
+    if (!fs.existsSync(dir)) {
+      fs.mkdirSync(peerRoot(home), { recursive: true });
+      const r = git(peerRoot(home), ['clone', '--depth', '50', '--', url, dir], {
+        timeout: 120000,
+      });
+      if (r.code !== 0)
+        throw new Error(`clone failed: ${(r.stderr || '').trim()}`);
+    }
+    if (!fs.existsSync(path.join(dir, 'MEMORY.md')))
+      err('warning: no MEMORY.md in clone — may not be an agent memory repo');
+    peers.push({ name, url });
+    saveConfig(home, cfg);
+    commit(home, ['amr.json'], `Add memory peer: ${name}`);
+    out(`peer ${name} -> ${dir}`);
+    return;
+  }
+
+  if (sub === 'remove') {
+    const name = normName(rest[0] || '');
+    const i = peers.findIndex((p) => p.name === name);
+    if (i < 0) throw new Error(`unknown peer "${rest[0] || ''}"`);
+    peers.splice(i, 1);
+    if (!peers.length) delete cfg.extraRepos;
+    saveConfig(home, cfg);
+    commit(home, ['amr.json'], `Remove memory peer: ${name}`);
+    out(`detached peer ${name}; clone left at ${peerDir(home, name)}`);
+    return;
+  }
+
+  throw new Error('usage: amr peer [add <url> [--name x] | remove <name>]');
+}
+
 export function cmdSync() {
   const home = ensureRepo();
+  // Refresh read-only peer clones first; a stale peer is a warn, not a
+  // blocker for syncing our own memory.
+  const cfg = loadConfig(home);
+  for (const p of cfg.extraRepos || []) {
+    const dir = peerDir(home, p.name);
+    if (!fs.existsSync(dir)) continue;
+    const r = git(dir, ['pull', '--ff-only'], { timeout: 10000 });
+    if (r.code !== 0)
+      err(`peer ${p.name} pull failed: ${(r.stderr || '').trim()}`);
+  }
   if (!hasRemote(home)) return out('no remote configured; local only');
   const hasUpstream =
     git(home, ['rev-parse', '--abbrev-ref', '@{u}']).code === 0;

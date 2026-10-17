@@ -737,6 +737,14 @@ export function cmdDoctor() {
     }
     if (dead.length)
       out(`config      : ${dead.length} unresolvable project key(s): ${dead.join(', ')}`);
+    const missingPeers = (cfg.extraRepos || []).filter(
+      (p) =>
+        !fs.existsSync(
+          path.join(path.dirname(homeDir), `${path.basename(homeDir)}-peers`, p.name)
+        )
+    );
+    if (missingPeers.length)
+      out(`peers       : ${missingPeers.map((p) => p.name).join(', ')} configured but not cloned`);
   }
   const onPath =
     sh('where', ['amr']).code === 0 || sh('which', ['amr']).code === 0;

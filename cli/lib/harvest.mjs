@@ -1,3 +1,4 @@
+import { createRequire } from 'node:module';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
@@ -75,7 +76,101 @@ const SOURCES = [
     ],
     ext: ['.jsonl', '.json'],
   },
+  {
+    host: 'opencode',
+    roots: [
+      path.join(home, '.local', 'share', 'opencode'),
+      path.join(localappdata, 'opencode'),
+    ],
+    ext: ['.db'],
+    match: /^opencode\.db$/i,
+  },
+  {
+    host: 'antigravity',
+    roots: [path.join(home, '.gemini', 'antigravity', 'conversations')],
+    ext: ['.db'],
+  },
+  // windsurf: Cascade keeps conversations in protobuf/leveldb under
+  // %APPDATA%/Windsurf and embedding blobs under ~/.codeium/database;
+  // no user-message transcript store to harvest.
 ];
+
+// node:sqlite is built in from Node 22.5; DB sources degrade silently
+// on older runtimes (file-based hosts keep working). Lazy require so
+// the ExperimentalWarning never pollutes non-harvest invocations.
+let DatabaseSync;
+const loadSqlite = () => {
+  if (DatabaseSync !== undefined) return DatabaseSync;
+  try {
+    DatabaseSync = createRequire(import.meta.url)('node:sqlite').DatabaseSync;
+  } catch {
+    DatabaseSync = null;
+  }
+  return DatabaseSync;
+};
+
+const openDb = (p) => {
+  const DS = loadSqlite();
+  if (!DS) return null;
+  try {
+    return new DS(p, { readOnly: true });
+  } catch {
+    return null;
+  }
+};
+
+// Antigravity step payloads are protobuf serialized as {"0":byte,...}.
+// step_type 14 is the user message; pull printable runs out of the
+// bytes and drop ID-shaped strings (uuids, base64url tokens).
+const agyUserText = (payload) => {
+  let buf;
+  if (Buffer.isBuffer(payload) || payload instanceof Uint8Array) {
+    buf = Buffer.from(payload);
+  } else {
+    let obj;
+    try {
+      obj = typeof payload === 'string' ? JSON.parse(payload) : payload;
+    } catch {
+      return '';
+    }
+    if (!obj || typeof obj !== 'object') return '';
+    buf = Buffer.from(Object.values(obj));
+  }
+  const text = buf.toString('utf8');
+  const runs =
+    text.match(/[ -~\u00a0-\u2fff\ue000-\ufffc]{15,}/g) || [];
+  // Keep prose runs: several words, mostly letters, little punctuation
+  // junk, no filename dumps or injected <TAG> blobs. The protobuf echoes
+  // the user string twice inside one payload; collapse the repeat.
+  const JUNK = /[-_$/\\*{}<>="#|~`@^[\]]/g;
+  const seen = new Set();
+  const kept = [];
+  for (const raw of runs) {
+    let t = raw
+      .trim()
+      .replace(/^[^\w<]+/, '')
+      .replace(/^[A-Z](?=[A-Z][a-z])/, '');
+    for (let len = t.length >> 1; len >= 15; len--) {
+      const i = t.indexOf(t.slice(0, len), 1);
+      if (i > 0) {
+        t = t.slice(0, i).replace(/\s+\S{1,4}["']?$/, '').trim();
+        break;
+      }
+    }
+    t = t.replace(/["'\s]+$/, '').trim();
+    if (t.split(/\s+/).filter(Boolean).length < 3) continue;
+    if (!/[a-z]/.test(t)) continue;
+    if (/^<[A-Za-z_][A-Za-z0-9_-]*[\s>]/.test(t)) continue;
+    if (/\.(png|jpe?g|gif|webp|exe|dll|db|md|json|log)\b/i.test(t))
+      continue;
+    if ((t.match(/[A-Za-z]/g) || []).length / t.length < 0.5) continue;
+    if ((t.match(JUNK) || []).length / t.length > 0.3) continue;
+    if (seen.has(t)) continue;
+    seen.add(t);
+    kept.push(t);
+  }
+  return kept.join(' ');
+};
 
 const MAX_PER_HOST = 100;
 
@@ -188,6 +283,47 @@ const EXTRACT = {
       out.push(clean(meta.prompt.replace(/<[^>]+>/g, ' ')));
     return out;
   },
+  // opencode keeps sessions in drizzle sqlite: message.data.role +
+  // part.data joined on message_id; text parts carry user prose.
+  opencode(p, since = 0) {
+    const db = openDb(p);
+    if (!db) return [];
+    try {
+      return db
+        .prepare(
+          `select p.data d from part p
+           join message m on p.message_id = m.id
+           where json_extract(m.data,'$.role') = 'user'
+             and json_extract(p.data,'$.type') = 'text'
+             and m.time_created >= ?
+           order by m.time_created`
+        )
+        .all(since)
+        .map((r) => clean(JSON.parse(r.d).text))
+        .filter((t) => !isNoise(t));
+    } catch {
+      return [];
+    } finally {
+      db.close();
+    }
+  },
+  // antigravity stores one sqlite trajectory db per conversation;
+  // steps.step_type 14 rows carry the user prompt as protobuf bytes.
+  antigravity(p) {
+    const db = openDb(p);
+    if (!db) return [];
+    try {
+      return db
+        .prepare('select step_payload from steps where step_type = 14')
+        .all()
+        .map((r) => clean(agyUserText(r.step_payload)))
+        .filter((t) => !isNoise(t));
+    } catch {
+      return [];
+    } finally {
+      db.close();
+    }
+  },
   generic(p) {
     if (p.endsWith('.jsonl'))
       return parseJsonl(p)
@@ -228,7 +364,8 @@ export function collectSessions(since) {
           if (e.isDirectory()) walk(p);
           else if (
             e.isFile() &&
-            src.ext.includes(path.extname(e.name).toLowerCase())
+            src.ext.includes(path.extname(e.name).toLowerCase()) &&
+            (!src.match || src.match.test(e.name))
           ) {
             try {
               const st = fs.statSync(p);
@@ -252,14 +389,17 @@ export function collectSessions(since) {
 }
 
 // Normalize found transcript files to their user-message streams.
-export function extractMessages(found, { max = 200, min = 15 } = {}) {
+export function extractMessages(
+  found,
+  { max = 200, min = 15, since = 0 } = {}
+) {
   const msgs = [];
   for (const f of found) {
     if (msgs.length >= max) break;
     const ext = EXTRACT[f.host] || EXTRACT.generic;
     let texts = [];
     try {
-      texts = ext(f.path).slice(0, MAX_PER_FILE);
+      texts = ext(f.path, since).slice(0, MAX_PER_FILE);
     } catch {
       continue;
     }
@@ -287,7 +427,7 @@ export function cmdHarvest(flags) {
   if (flags.extract) {
     const max = numFlag(flags.max || '200', 200);
     const min = numFlag(flags.min || '15', 15);
-    const msgs = extractMessages(found, { max, min });
+    const msgs = extractMessages(found, { max, min, since });
     if (flags.json) return out(JSON.stringify(msgs, null, 2));
     for (const m of msgs)
       out(

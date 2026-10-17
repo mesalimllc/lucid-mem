@@ -7,6 +7,7 @@ import {
   cmdEnsure,
   cmdIndex,
   cmdLink,
+  cmdPeer,
   cmdPolicy,
   cmdRemote,
   cmdSearch,
@@ -33,6 +34,7 @@ usage: amr <command> [args] [flags]
   link <name...> [--for <p>]    auto-attach other repos' memories to this repo's sessions
   unlink <name...> [--for <p>]  remove auto-attach links
   policy [name key bool]        per-repo policy: noglobal, private (no args = list)
+  peer [add <url>|remove <n>]   attach another memory repo (multiplayer); clones into <AMR_HOME>-peers
   remote [set <url>]            show or set the git remote (private repos only)
   sync                          pull --rebase + push (no-op without a remote)
   doctor                        check repo, PATH, and per-host wiring
@@ -115,6 +117,8 @@ export function main(argv) {
         return cmdUnlink(pos, flags);
       case 'policy':
         return cmdPolicy(pos);
+      case 'peer':
+        return cmdPeer(pos, flags);
       case 'remote':
         return cmdRemote(pos);
       case 'sync':

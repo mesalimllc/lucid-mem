@@ -51,6 +51,7 @@ A `sessionEnd` hook commits and pushes anything `amr` left dirty, so nothing is 
 | `amr index` | Rebuild the `## Index` section of `MEMORY.md` from files on disk. |
 | `amr link <name...> [--for <p>]` | Auto-attach other repos' memory to a repo's sessions (transitive). |
 | `amr unlink <name...> [--for <p>]` | Remove links. |
+| `amr peer [add <url>\|remove <n>]` | Attach a teammate's memory repo (multiplayer). Clones into `<AMR_HOME>-peers/`; `amr context` composes its global digest plus its copy of the current project's memory, read-only. |
 | `amr policy [name key bool]` | Per-repo policy: `noglobal` (skip global memory), `private` (details below). No args = list all. |
 | `amr remote [set <url>]` | Show or set the memory repo's git remote. Private repos only. |
 | `amr sync` | `pull --rebase --autostash` + `push`. No-op without a remote. |
@@ -94,9 +95,13 @@ One memory repo serves every project. Project files live at `projects/<name>-<ha
 - `noglobal` keeps a repo's sessions free of global memory.
 - Unknown link targets surface as `<!-- unresolved -->` markers, and `amr doctor` flags dead `amr.json` keys.
 
+### Peer memory repos
+
+`amr peer add <url>` clones a teammate's memory repo into `<AMR_HOME>-peers/<name>` (next to `AMR_HOME`, never committed into yours) and records it in `amr.json` `extraRepos`. Context then appends a bounded `## Peer:` section: their global digest plus their `projects/` file for the same repo — same-slug matching means a teammate's notes on a shared project appear automatically. Peers are read-only: `amr sync` fast-forward pulls them before pushing yours, `amr peer remove` detaches the config without deleting the clone, and missing clones surface as context markers plus a doctor warning.
+
 ## Transcript intelligence
 
-`amr harvest` and `amr discover` read local transcript stores (claude, codex, devin, muse, cline, copilot, cursor, commandcode, freebuff/manicode) to tell you where memory is missing:
+`amr harvest` and `amr discover` read local transcript stores (claude, codex, devin, muse, cline, copilot, cursor, commandcode, freebuff/manicode, opencode, antigravity) to tell you where memory is missing. OpenCode and Antigravity keep sessions in SQLite (`opencode.db`, per-conversation trajectory DBs); harvest reads them via Node's built-in `node:sqlite` (Node 22.5+), which degrades gracefully on older runtimes. Windsurf's Cascade store is protobuf/leveldb with no user-message transcript file, so it isn't harvested.
 
 ```sh
 amr discover          # hot repos without memory + suggested links
