@@ -26,7 +26,7 @@ const USAGE = `amr: agent memory CLI (lucid-mem)
 usage: amr <command> [args] [flags]
 
   ensure                        create/verify the memory repo ($AMR_HOME, default ~/agent-memory)
-  context [dir]                 print session memory digest (global + current project, capped; --full for all)
+  context [dir]                 session digest: project-scoped inside a known repo; global + pooled projects outside
   add "text"                    save a memory entry
   update "match" "text"         replace an existing entry in place
   search "term"                 grep all memory files

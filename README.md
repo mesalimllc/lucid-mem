@@ -52,7 +52,7 @@ A `sessionEnd` hook commits and pushes anything `amr` left dirty, so nothing is 
 | `amr link <name...> [--for <p>]` | Auto-attach other repos' memory to a repo's sessions (transitive). |
 | `amr unlink <name...> [--for <p>]` | Remove links. |
 | `amr peer [add <url>\|remove <n>]` | Attach a teammate's memory repo (multiplayer). Clones into `<AMR_HOME>-peers/`; `amr context` composes its global digest plus its copy of the current project's memory, read-only. |
-| `amr policy [name key bool]` | Per-repo policy: `noglobal` (skip global memory), `private` (details below). No args = list all. |
+| `amr policy [name key bool]` | Per-repo policy: `noglobal` (keep out of the pooled outside digest), `private` (details below). No args = list all. |
 | `amr remote [set <url>]` | Show or set the memory repo's git remote. Private repos only. |
 | `amr sync` | `pull --rebase --autostash` + `push`. No-op without a remote. |
 | `amr doctor` | Repo health, PATH, per-host wiring, dead `amr.json` keys. |
@@ -89,10 +89,10 @@ Rules-only hosts rely on the agent reading its global instruction file each sess
 
 One memory repo serves every project. Project files live at `projects/<name>-<hash>.md`, where the hash is 6 chars of SHA-1 over the origin remote URL (falling back to the repo path). Two clones of one remote share memory; two unrelated repos with the same name don't collide.
 
-- `amr context` injects **global + current project + linked projects**, capped at 5 project files, with linked projects getting smaller digests.
+- `amr context` is mode-based: inside a repo that has a memory file it is **project-scoped** — this project plus linked siblings, each capped at 25 bullets, up to 8 project files, no global section. Outside any known project (or in a repo with no memory yet) it is **global bullets plus a pooled digest** — the latest 25 entries across all project files, newest first.
 - `amr link trackdub-gated` inside `Trackdub` makes gated's memory appear whenever a session runs in Trackdub. Links are directional and transitive; `--for <p>` links on another repo's behalf.
-- `private` means **unreachable transitively**: direct links and explicit `--also` attach it; it refuses when reached through another repo's links. Context prints a `<!-- omitted by private policy -->` marker instead of dropping silently.
-- `noglobal` keeps a repo's sessions free of global memory.
+- `private` means **unreachable transitively**: direct links and explicit `--also` attach it; it refuses when reached through another repo's links, and it never contributes to the pooled outside digest. Context prints a `<!-- omitted by private policy -->` marker instead of dropping silently.
+- `noglobal` keeps a project out of the pooled outside digest (project sessions are already global-free by default).
 - Unknown link targets surface as `<!-- unresolved -->` markers, and `amr doctor` flags dead `amr.json` keys.
 
 ### Peer memory repos

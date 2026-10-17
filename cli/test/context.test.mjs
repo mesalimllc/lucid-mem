@@ -82,16 +82,38 @@ test('unlink removes the auto-attach', () => {
   assert.ok(!run(['context'], { amrHome: home, cwd: repoB }).stdout.includes('x1 fact'));
 });
 
-test('noglobal policy suppresses global memory for that repo', () => {
+test('context in a known project is project-scoped (no global section)', () => {
   const home = tmpdir();
   const repo = initRepo(path.join(tmpdir(), 'iso'), 'https://github.com/acme/iso.git');
   run(['ensure'], { amrHome: home });
   run(['add', 'global pref'], { amrHome: home });
   seed(home, repo, 'iso fact');
-  const before = run(['context'], { amrHome: home, cwd: repo });
-  assert.match(before.stdout, /global pref/);
-  run(['policy', 'iso', 'noglobal', 'true'], { amrHome: home, cwd: repo });
-  const after = run(['context'], { amrHome: home, cwd: repo });
-  assert.match(after.stdout, /iso fact/);
-  assert.ok(!after.stdout.includes('global pref'));
+  const r = run(['context'], { amrHome: home, cwd: repo });
+  assert.match(r.stdout, /iso fact/);
+  assert.ok(!r.stdout.includes('global pref'));
+  assert.ok(!r.stdout.includes('## Global'));
+  assert.ok(!r.stdout.includes('## Recent project memory'));
+});
+
+test('outside context pools latest project entries; private and noglobal excluded', () => {
+  const home = tmpdir();
+  const base = tmpdir();
+  const repoA = initRepo(path.join(base, 'pa'), 'https://github.com/acme/pa.git');
+  const repoB = initRepo(path.join(base, 'pb'), 'https://github.com/acme/pb.git');
+  const repoC = initRepo(path.join(base, 'pc'), 'https://github.com/acme/pc.git');
+  const repoD = initRepo(path.join(base, 'pd'), 'https://github.com/acme/pd.git');
+  run(['ensure'], { amrHome: home });
+  seed(home, repoA, 'pa pooled fact');
+  seed(home, repoB, 'pb pooled fact');
+  seed(home, repoC, 'pc secret fact');
+  seed(home, repoD, 'pd quiet fact');
+  run(['policy', 'pc', 'private', 'true'], { amrHome: home, cwd: repoC });
+  run(['policy', 'pd', 'noglobal', 'true'], { amrHome: home, cwd: repoD });
+  const r = run(['context'], { amrHome: home, cwd: tmpdir() });
+  assert.equal(r.status, 0, r.stderr);
+  assert.match(r.stdout, /## Recent project memory/);
+  assert.match(r.stdout, /pa pooled fact/);
+  assert.match(r.stdout, /pb pooled fact/);
+  assert.ok(!r.stdout.includes('pc secret fact'));
+  assert.ok(!r.stdout.includes('pd quiet fact'));
 });

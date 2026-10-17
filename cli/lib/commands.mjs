@@ -77,14 +77,20 @@ export function cmdContext(flags) {
         ];
   const cfg = loadConfig(home);
   const entry = proj ? projectEntry(cfg, proj) : null;
-  // noglobal: this repo's sessions omit the global section.
-  const globalLines = entry?.noglobal
-    ? []
-    : cap(bullets(idxSplit[0] || ''), 25);
+  // Two modes: inside a repo that has a memory file, the digest is
+  // project-scoped — this project plus its linked siblings only, no
+  // global bullets. Outside any known project (or a repo with no
+  // memory yet), it is global bullets plus a pooled digest of the
+  // latest entries across all projects.
+  const projHasFile =
+    !!proj &&
+    fs.existsSync(path.join(home, 'projects', `${proj.slug}.md`));
+  const inProject = projHasFile;
+  const globalLines = inProject ? [] : cap(bullets(idxSplit[0] || ''), 25);
   const indexLinks = cap(bullets(idxSplit[1] || ''), 12);
 
   // Attach list: the current project, then its config links
-  // (transitive, deduped, max 5 total) and any --also names.
+  // (transitive, deduped, max 8 total) and any --also names.
   // private blocks reachability from repos that never linked it:
   // direct links (siblings) and explicit --also attach fine; it only
   // refuses when reached transitively through another project's links.
@@ -92,7 +98,7 @@ export function cmdContext(flags) {
   const attach = [];
   const seen = new Set();
   const push = (slug, linked) => {
-    if (seen.has(slug) || attach.length >= 5) return;
+    if (seen.has(slug) || attach.length >= 8) return;
     seen.add(slug);
     attach.push({ slug, name: bySlug.get(slug)?.name || slug, linked });
   };
@@ -106,7 +112,7 @@ export function cmdContext(flags) {
     );
   const refused = [];
   const unknown = [];
-  while (queue.length && attach.length < 5) {
+  while (queue.length && attach.length < 8) {
     const { k: raw, via } = queue.shift();
     const key = String(raw).trim().toLowerCase();
     if (!key) continue;
@@ -131,12 +137,32 @@ export function cmdContext(flags) {
   for (const a of attach) {
     const pf = path.join(home, 'projects', `${a.slug}.md`);
     if (!fs.existsSync(pf)) continue;
-    const body = cap(
-      bullets(fs.readFileSync(pf, 'utf8')),
-      a.linked ? 12 : 25
-    ).join('\n');
+    const body = cap(bullets(fs.readFileSync(pf, 'utf8')), 25).join('\n');
     lines.push('', `## Project: ${a.name}${a.linked ? ' (linked)' : ''}`);
     if (body) lines.push(body);
+  }
+  // Outside-mode digest: the latest 25 project entries pooled across
+  // every project file, newest first by added: date. private projects
+  // never contribute (must not leak into foreign sessions); noglobal
+  // projects opt out of the pooled view the same way.
+  if (!inProject) {
+    const pool = [];
+    for (const p of listProjects(home)) {
+      const e = projectEntry(cfg, p);
+      if (e?.private || e?.noglobal) continue;
+      const pf = path.join(home, 'projects', `${p.slug}.md`);
+      for (const b of bullets(fs.readFileSync(pf, 'utf8'))) {
+        const d = (b.match(/added: (\d{4}-\d{2}-\d{2})/) || [])[1] || '';
+        pool.push({
+          d,
+          b: /project:/.test(b) ? b : b.replace(/^- /, `- (${p.name}) `),
+        });
+      }
+    }
+    pool.sort((a, b) => b.d.localeCompare(a.d));
+    const recent = cap(pool.map((x) => x.b), 25);
+    if (recent.length)
+      lines.push('', '## Recent project memory', recent.join('\n'));
   }
   if (indexLinks.length) lines.push('', '## Index', indexLinks.join('\n'));
   if (refused.length)
