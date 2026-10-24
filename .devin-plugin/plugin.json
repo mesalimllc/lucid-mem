@@ -1,6 +1,6 @@
 {
   "name": "lucid-mem",
   "description": "Keep agent memory in a git repo, following the Agent Memory Repo spec.",
-  "repository": "https://github.com/tonythethompson/lucid-mem",
+  "repository": "https://github.com/mesalimllc/lucid-mem",
   "license": "MIT"
 }
