@@ -107,7 +107,10 @@ test('dream --triage plans first, then --apply keeps, rewrites and archives', ()
   assert.match(after, /run 40046098775 \[added: 2026-10-22; id: a003; kind: fact\]/);
   assert.match(after, /prefers tabs over spaces/);
   // Archived, not deleted: still searchable.
-  assert.match(read(path.join(home, 'archive', 'MEMORY.md')), /93372492/);
+  const archive = read(path.join(home, 'archive', 'MEMORY.md'));
+  assert.match(archive, /93372492/);
+  // A rewrite keeps its original in the archive too.
+  assert.match(archive, /raised to 120s in a6ca4a54/);
   assert.match(run(['search', '93372492'], { amrHome: home }).stdout, /archive\/MEMORY\.md/);
   assert.equal(fs.existsSync(path.join(home, 'dreams', 'triage-plan.json')), false);
 });

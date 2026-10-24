@@ -4,7 +4,8 @@
 // dreams/triage-plan.json for review. Nothing in memory changes until
 // `amr dream --triage --apply`, which applies the plan: keep and rewrite
 // stamp a kind, archive moves the line to archive/<file> (still found by
-// `amr search`). No entry is ever deleted.
+// `amr search`), and a rewrite also archives the original wording. No
+// entry is ever deleted.
 //
 // A keyword heuristic cannot do this split: measured on a real repo,
 // half the "state-looking" entries were root causes that merely cited a
@@ -206,6 +207,9 @@ function apply(home) {
         } else if (it.action === 'keep') {
           lines[i] = withKind(lines[i], it.kind);
         } else {
+          // Rewrites can drop detail the judge judged incidental; the
+          // original goes to the archive so `amr search` still finds it.
+          archived.push(lines[i]);
           const meta = (lines[i].match(META) || [''])[0];
           lines[i] = withKind(`- ${it.text}${meta}`, it.kind);
         }
