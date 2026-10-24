@@ -182,6 +182,7 @@ export function cmdContext(flags) {
     if (full) return arr;
     const picked = pickWithinBudget(arr, n, remaining, usage, (l) => episodicHits(l).length > 0);
     remaining -= picked.chars;
+    if (picked.clipped && picked.items.length === arr.length) return picked.items;
     return picked.items.length === arr.length
       ? arr
       : [

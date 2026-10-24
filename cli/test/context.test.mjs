@@ -141,3 +141,25 @@ test('context ranks by kind/recency within a budget; `amr used` boosts entries, 
   assert.match(after, /number 7/);
   assert.match(run0(['context', '--full']).stdout, /number 0/);
 });
+
+test('context clips oversized floor entries so the budget overrun stays bounded', () => {
+  const home = tmpdir();
+  const run0 = (args) => run(args, { amrHome: home });
+  run0(['ensure']);
+  const huge = (n) => `- huge entry ${n} ${'detail '.repeat(700)}[added: 2026-10-20; kind: pitfall; id: c00${n}]`;
+  fs.writeFileSync(
+    path.join(home, 'MEMORY.md'),
+    `# Memory\n\n${[1, 2, 3].map(huge).join('\n')}\n\n## Index\n`
+  );
+  const out = run0(['context', '--budget', '10']).stdout;
+  const lines = out.split('\n').filter((l) => l.startsWith('- huge entry'));
+  // The floor still shows the top three entries...
+  assert.equal(lines.length, 3);
+  for (const [i, l] of lines.entries()) {
+    // ...each clipped to the floor cap, with its id meta intact.
+    assert.ok(l.length <= 240, `entry ${i + 1} is ${l.length} chars`);
+    assert.match(l, /…\s*\[added: 2026-10-20; kind: pitfall; id: c00\d\]$/);
+  }
+  // --full is the escape hatch: nothing clipped.
+  assert.ok(run0(['context', '--full']).stdout.includes('detail '.repeat(700).trim()));
+});

@@ -65,20 +65,44 @@ export function scoreEntry(line, usage = {}, isNoise = () => false, now = Date.n
   return s;
 }
 
+// A floor entry that would overrun the budget is clipped to this many
+// chars, so the floor bounds the overrun (MIN_PER_SECTION x this per
+// section) instead of letting a few huge entries blow the limit.
+export const FLOOR_ENTRY_CAP = 240;
+
+// Shorten an entry's text, keeping its trailing [meta] so the id stays
+// addressable (`amr search`, `amr update <id>`) after clipping.
+export function clipEntry(line, cap = FLOOR_ENTRY_CAP) {
+  if (line.length <= cap) return line;
+  const meta = (line.match(/\s*\[[^\]]*\]\s*$/) || [''])[0];
+  const body = line.slice(0, line.length - meta.length);
+  const keep = Math.max(24, cap - meta.length - 1);
+  return `${body.slice(0, keep).trimEnd()}…${meta}`;
+}
+
 // Highest-scored entries first until `maxCount` or the char budget is
-// hit (always at least MIN_PER_SECTION), returned in original order.
+// hit, returned in original order. The top MIN_PER_SECTION entries are
+// always kept, clipped when they would not fit, so a section never
+// renders empty but also never exceeds the budget by more than the
+// floor cap allows.
 export function pickWithinBudget(arr, maxCount, budget, usage, isNoise) {
   const ranked = arr
     .map((line, i) => ({ line, i, s: scoreEntry(line, usage, isNoise) }))
     .sort((a, b) => b.s - a.s || b.i - a.i);
   const chosen = [];
   let chars = 0;
+  let clipped = false;
   for (const r of ranked) {
     if (chosen.length >= maxCount) break;
-    if (chosen.length >= MIN_PER_SECTION && chars + r.line.length > budget) continue;
+    if (chars + r.line.length > budget) {
+      if (chosen.length >= MIN_PER_SECTION) continue;
+      const line = clipEntry(r.line);
+      clipped ||= line !== r.line;
+      r.line = line;
+    }
     chosen.push(r);
     chars += r.line.length;
   }
   chosen.sort((a, b) => a.i - b.i);
-  return { items: chosen.map((r) => r.line), chars };
+  return { items: chosen.map((r) => r.line), chars, clipped };
 }
