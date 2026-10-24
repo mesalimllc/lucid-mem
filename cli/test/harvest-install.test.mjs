@@ -159,3 +159,80 @@ test('install migrates pre-rename agent-memory-repo blocks and files; uninstall 
   assert.match(after, /keep me/);
   assert.ok(!after.includes('agent-memory-repo'));
 });
+
+test('install --host gemini-cli wires MCP and shared GEMINI.md; uninstall preserves shared rules', () => {
+  const home = tmpdir();
+  const fakeHome = tmpdir();
+  run(['ensure'], { amrHome: home });
+  const geminiDir = path.join(fakeHome, '.gemini');
+  fs.mkdirSync(geminiDir, { recursive: true });
+
+  const r1 = run(['install', '--host', 'gemini-cli'], { amrHome: home, fakeHome });
+  assert.equal(r1.status, 0, r1.stderr);
+  const settingsFile = path.join(geminiDir, 'settings.json');
+  const settings = JSON.parse(read(settingsFile));
+  assert.equal(settings.mcpServers['agent-memory'].command, 'node');
+  assert.deepEqual(settings.mcpServers['agent-memory'].args.slice(-1), ['serve']);
+  const rulesFile = path.join(geminiDir, 'GEMINI.md');
+  assert.match(read(rulesFile), /agent-memory-repo/);
+
+  const r2 = run(['install', '--host', 'gemini-cli'], { amrHome: home, fakeHome });
+  assert.equal(r2.status, 0, r2.stderr);
+  assert.match(r2.stdout, /mcp already wired/);
+
+  // Antigravity also consumes this global GEMINI.md. Removing Gemini CLI
+  // must not remove rules while Antigravity remains installed.
+  fs.mkdirSync(path.join(geminiDir, 'antigravity-cli'));
+  const removed = run(['uninstall', '--host', 'gemini-cli'], { amrHome: home, fakeHome });
+  assert.equal(removed.status, 0, removed.stderr);
+  assert.match(removed.stdout, /rules retained \(also used by antigravity\)/);
+  assert.match(read(rulesFile), /agent-memory-repo/);
+  assert.ok(!JSON.parse(read(settingsFile)).mcpServers?.['agent-memory']);
+});
+
+test('install --host zed wires context_servers + personal AGENTS.md, idempotent and reversible', () => {
+  const home = tmpdir();
+  const fakeHome = tmpdir();
+  run(['ensure'], { amrHome: home });
+  const zedDir = path.join(fakeHome, 'AppData', 'Roaming', 'Zed');
+  fs.mkdirSync(zedDir, { recursive: true });
+  const settingsFile = path.join(zedDir, 'settings.json');
+  fs.writeFileSync(settingsFile, JSON.stringify({ theme: 'One Dark' }));
+
+  const r1 = run(['install', '--host', 'zed'], { amrHome: home, fakeHome });
+  assert.equal(r1.status, 0, r1.stderr);
+  let settings = JSON.parse(read(settingsFile));
+  assert.equal(settings.theme, 'One Dark');
+  assert.equal(settings.context_servers['agent-memory'].command, 'node');
+  assert.deepEqual(settings.context_servers['agent-memory'].args.slice(-1), ['serve']);
+  const agentsFile = path.join(zedDir, 'AGENTS.md');
+  assert.match(read(agentsFile), /agent-memory-repo/);
+
+  const r2 = run(['install', '--host', 'zed'], { amrHome: home, fakeHome });
+  assert.equal(r2.status, 0, r2.stderr);
+  assert.match(r2.stdout, /mcp already wired/);
+
+  const removed = run(['uninstall', '--host', 'zed'], { amrHome: home, fakeHome });
+  assert.equal(removed.status, 0, removed.stderr);
+  settings = JSON.parse(read(settingsFile));
+  assert.equal(settings.theme, 'One Dark');
+  assert.ok(!settings.context_servers);
+  assert.ok(!fs.existsSync(agentsFile));
+});
+
+test('install --host zed leaves JSONC settings untouched and reports skipped MCP', () => {
+  const home = tmpdir();
+  const fakeHome = tmpdir();
+  run(['ensure'], { amrHome: home });
+  const zedDir = path.join(fakeHome, 'AppData', 'Roaming', 'Zed');
+  fs.mkdirSync(zedDir, { recursive: true });
+  const settingsFile = path.join(zedDir, 'settings.json');
+  const original = '{\n  // user comment\n  "theme": "One Dark"\n}\n';
+  fs.writeFileSync(settingsFile, original);
+
+  const r = run(['install', '--host', 'zed'], { amrHome: home, fakeHome });
+  assert.equal(r.status, 0, r.stderr);
+  assert.match(r.stdout, /mcp skipped \(unparseable\)/);
+  assert.equal(read(settingsFile), original);
+  assert.match(read(path.join(zedDir, 'AGENTS.md')), /agent-memory-repo/);
+});

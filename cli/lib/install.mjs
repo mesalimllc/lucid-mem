@@ -42,12 +42,17 @@ ${RULE_BLOCK}
 
 const home = os.homedir();
 const appdata = process.env.APPDATA || path.join(home, 'AppData', 'Roaming');
+const xdgConfigHome = process.env.XDG_CONFIG_HOME || path.join(home, '.config');
 
 const firstExisting = (paths) => paths.find((p) => fs.existsSync(p));
 
 const localappdata =
   process.env.LOCALAPPDATA || path.join(home, 'AppData', 'Local');
 const documents = path.join(home, 'Documents');
+const zedConfig =
+  process.platform === 'win32'
+    ? path.join(appdata, 'Zed')
+    : path.join(xdgConfigHome, 'zed');
 
 const HOSTS = {
   cursor: {
@@ -194,6 +199,30 @@ const HOSTS = {
       },
     ],
   },
+  'gemini-cli': {
+    // Gemini CLI shares GEMINI.md with Antigravity but stores MCP servers
+    // in settings.json using the standard mcpServers shape.
+    detect: () => fs.existsSync(path.join(home, '.gemini', 'settings.json')),
+    mcpJson: () => path.join(home, '.gemini', 'settings.json'),
+    rules: () => [
+      {
+        path: path.join(home, '.gemini', 'GEMINI.md'),
+        content: RULE_BLOCK,
+        append: true,
+      },
+    ],
+  },
+  zed: {
+    detect: () => fs.existsSync(zedConfig),
+    mcpZed: () => path.join(zedConfig, 'settings.json'),
+    rules: () => [
+      {
+        path: path.join(zedConfig, 'AGENTS.md'),
+        content: RULE_BLOCK,
+        append: true,
+      },
+    ],
+  },
   opencode: {
     // SST's opencode CLI. Global rules at ~/.config/opencode/AGENTS.md;
     // MCP lives in opencode.json's "mcp" object with a local/remote
@@ -317,6 +346,36 @@ function mergeMcpOpencode(file) {
       command: ['node', CLI_ENTRY, 'serve'],
       disabled: false,
     },
+  };
+  backup(file);
+  fs.mkdirSync(path.dirname(file), { recursive: true });
+  fs.writeFileSync(file, JSON.stringify(cfg, null, 2) + '\n');
+  return true;
+}
+
+// Zed stores context servers in `context_servers` and permits JSONC
+// comments in settings.json. Keep an unparseable file untouched.
+function mergeMcpZed(file) {
+  let cfg = {};
+  if (fs.existsSync(file)) {
+    const text = fs.readFileSync(file, 'utf8');
+    try {
+      cfg = JSON.parse(text);
+    } catch {
+      return 'skipped (unparseable)';
+    }
+  }
+  if (!cfg || typeof cfg !== 'object' || Array.isArray(cfg))
+    return 'skipped (invalid settings root)';
+  if (cfg.context_servers?.['agent-memory']) return false;
+  if (
+    cfg.context_servers != null &&
+    (typeof cfg.context_servers !== 'object' || Array.isArray(cfg.context_servers))
+  )
+    return 'skipped (invalid context_servers)';
+  cfg.context_servers = {
+    ...(cfg.context_servers || {}),
+    'agent-memory': { command: 'node', args: [CLI_ENTRY, 'serve'], env: {} },
   };
   backup(file);
   fs.mkdirSync(path.dirname(file), { recursive: true });
@@ -556,6 +615,17 @@ export function cmdInstall(flags) {
             : `mcp ${res}: ${file}`
         );
       }
+      if (h.mcpZed) {
+        const file = h.mcpZed();
+        const res = mergeMcpZed(file);
+        did.push(
+          res === true
+            ? `mcp +agent-memory in ${file}`
+            : res === false
+            ? `mcp already wired in ${file}`
+            : `mcp ${res}: ${file}`
+        );
+      }
     } catch (e) {
       err(`${name}: ${e.message}`);
       failed.push(name);
@@ -677,6 +747,22 @@ function unmergeMcpOpencode(file) {
   return true;
 }
 
+function unmergeMcpZed(file) {
+  if (!fs.existsSync(file)) return false;
+  let cfg;
+  try {
+    cfg = JSON.parse(fs.readFileSync(file, 'utf8'));
+  } catch {
+    return false;
+  }
+  if (!cfg.context_servers?.['agent-memory']) return false;
+  delete cfg.context_servers['agent-memory'];
+  if (!Object.keys(cfg.context_servers).length) delete cfg.context_servers;
+  backup(file);
+  fs.writeFileSync(file, JSON.stringify(cfg, null, 2) + '\n');
+  return true;
+}
+
 function unstampRules(file) {
   if (!fs.existsSync(file)) return 'absent';
   const text = fs.readFileSync(file, 'utf8');
@@ -720,6 +806,18 @@ export function cmdUninstall(flags) {
         did.push(`hooks removed from ${h.settingsJson()}`);
       if (h.rules) {
         for (const r of h.rules()) {
+          const sharedWith = Object.entries(HOSTS).find(
+            ([otherName, other]) =>
+              !names.includes(otherName) &&
+              other.detect() &&
+              other.rules?.().some(
+                (otherRule) => path.resolve(otherRule.path) === path.resolve(r.path)
+              )
+          )?.[0];
+          if (sharedWith) {
+            did.push(`rules retained (also used by ${sharedWith}): ${r.path}`);
+            continue;
+          }
           for (const p of [r.path, ...(r.legacyPaths || [])]) {
             const res = unstampRules(p);
             if (res !== 'absent') did.push(`rules ${res}: ${p}`);
@@ -732,6 +830,8 @@ export function cmdUninstall(flags) {
         did.push(`mcp entry removed from ${h.mcpToml()}`);
       if (h.mcpOpencode && unmergeMcpOpencode(h.mcpOpencode()))
         did.push(`mcp entry removed from ${h.mcpOpencode()}`);
+      if (h.mcpZed && unmergeMcpZed(h.mcpZed()))
+        did.push(`mcp entry removed from ${h.mcpZed()}`);
     } catch (e) {
       err(`${name}: ${e.message}`);
       continue;
@@ -751,7 +851,8 @@ function hostWired(name) {
     const mcp =
       (h.mcpJson && has(h.mcpJson(), 'agent-memory')) ||
       (h.mcpToml && has(h.mcpToml(), 'agent-memory')) ||
-      (h.mcpOpencode && has(h.mcpOpencode(), 'agent-memory'));
+      (h.mcpOpencode && has(h.mcpOpencode(), 'agent-memory')) ||
+      (h.mcpZed && has(h.mcpZed(), 'agent-memory'));
     if (h.rules && h.rules().some((r) => has(r.path, MARK_BEGIN) || has(r.path, LEGACY_MARK_BEGIN)))
       return mcp ? 'wired (rules+mcp)' : 'wired (rules only)';
     if (mcp) return 'wired (mcp only)';
