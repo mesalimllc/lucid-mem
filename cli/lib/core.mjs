@@ -211,11 +211,24 @@ export function withLock(repo, fn) {
   }
 }
 
+// A failed `git add` (typically index.lock held by another git process)
+// used to be ignored, so the commit silently left that file out. Retry
+// briefly, and report failure if any file still did not stage.
 export function commit(repo, files, msg) {
   ensureIdentity(repo);
-  for (const f of files) git(repo, ['add', '--', f]);
+  const unstaged = [];
+  for (const f of files) {
+    let r = git(repo, ['add', '--', f]);
+    for (let i = 0; i < 5 && r.code !== 0; i++) {
+      Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 200);
+      r = git(repo, ['add', '--', f]);
+    }
+    if (r.code !== 0) unstaged.push(f);
+  }
   const r = git(repo, ['commit', '-m', msg]);
-  return r.code === 0;
+  if (unstaged.length)
+    process.stderr.write(`amr: could not stage ${unstaged.join(', ')}; left uncommitted\n`);
+  return r.code === 0 && !unstaged.length;
 }
 
 export function hasRemote(repo) {

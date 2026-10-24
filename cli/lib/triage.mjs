@@ -232,8 +232,11 @@ function apply(home) {
       }
     }
     fs.rmSync(abs, { force: true });
-    if (counts.keep + counts.rewrite + counts.archive)
-      commit(home, [...touched], 'Dream: triage session-state backlog');
+    if (
+      counts.keep + counts.rewrite + counts.archive &&
+      !commit(home, [...touched], 'Dream: triage session-state backlog')
+    )
+      err('triage: changes applied but not fully committed; run `git status` in the memory repo');
   });
   out(
     `triage applied: kept ${counts.keep}, rewrote ${counts.rewrite}, archived ${counts.archive}` +
