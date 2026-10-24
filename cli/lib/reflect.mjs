@@ -17,10 +17,25 @@ import { resolveJudge, runJudge } from './judge.mjs';
 import { isNearDuplicate, queueReflections } from './pending.mjs';
 
 const MAX_CHARS = 14000;
+const HEAD_CHARS = 4000;
+const TOOL_SNIPPET_CHARS = 500;
 const MAX_ENTRIES = 5;
 const MEMORY_CHARS = 6000;
 
-// Recent user/assistant prose, tool calls and results dropped.
+// Root causes often surface in tool output, not prose: a failing test,
+// a timeout, a stack trace. Keep only results that look like failures.
+const FAILURE = /\b(?:error|errors|failed|failing|failure|fatal|exception|timed out|timeout|ETIMEDOUT|denied|refused|not found|panic|traceback|assertion)\b/i;
+
+function toolResultText(b) {
+  const c = b?.content;
+  if (typeof c === 'string') return c;
+  if (Array.isArray(c)) return c.filter((x) => x?.type === 'text').map((x) => x.text).join('\n');
+  return '';
+}
+
+// User/assistant prose plus clipped failing tool results. Over budget,
+// keeps the head (early root causes) and the tail (the outcome) rather
+// than only the tail. Secret-shaped tool output is never sent.
 export function transcriptText(file) {
   const parts = [];
   for (const line of fs.readFileSync(file, 'utf8').split('\n')) {
@@ -39,8 +54,18 @@ export function transcriptText(file) {
           ? c.filter((b) => b?.type === 'text').map((b) => b.text).join('\n')
           : '';
     if (text.trim()) parts.push(`${o.type.toUpperCase()}: ${text.trim()}`);
+    if (!Array.isArray(c)) continue;
+    for (const b of c) {
+      if (b?.type !== 'tool_result') continue;
+      const t = toolResultText(b).trim();
+      if (!t || !(b.is_error || FAILURE.test(t)) || looksSecret(t)) continue;
+      const clipped = t.length > TOOL_SNIPPET_CHARS ? `${t.slice(0, TOOL_SNIPPET_CHARS)}…` : t;
+      parts.push(`TOOL RESULT${b.is_error ? ' (error)' : ''}: ${clipped}`);
+    }
   }
-  return parts.join('\n\n').slice(-MAX_CHARS);
+  const all = parts.join('\n\n');
+  if (all.length <= MAX_CHARS) return all;
+  return `${all.slice(0, HEAD_CHARS)}\n\n[… middle of session omitted …]\n\n${all.slice(-(MAX_CHARS - HEAD_CHARS))}`;
 }
 
 // The memory the judge would add to: global entries plus this project's
@@ -118,6 +143,7 @@ export function vetProposals(entries, memory) {
   const kept = [];
   for (const e of entries) {
     const text = e.text.trim();
+    // Queued proposals bypass cmdAdd's secret check, so apply it here.
     if (episodicHits(text).length || looksSecret(text)) continue;
     if (e.op === 'update') {
       if (ids.has(String(e.id))) kept.push({ op: 'update', id: String(e.id), text });

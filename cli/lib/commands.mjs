@@ -116,15 +116,34 @@ export function cmdReflect() {
   );
 }
 
-// Reflection costs a blocked turn, so only fire after real work: enough
-// edit/commit-class tool calls since the last reflection in this
-// session. Without a transcript to judge by, stay quiet.
+// Reflection costs a judge run, so only fire after real work since the
+// last reflection in this session: enough changing tool calls (edits,
+// or shell commands that write, commit, push or open PRs), or enough
+// tool calls of any kind, which catches investigation-only sessions that
+// end in a root cause without editing. Without a transcript, stay quiet.
 const WORK_TOOLS = new Set(['Edit', 'Write', 'MultiEdit', 'NotebookEdit']);
+const SHELL_TOOLS = new Set(['Bash', 'PowerShell']);
 const REFLECT_MIN_WORK = 6;
+const REFLECT_MIN_CALLS = 20;
+
+// Shell commands that change files, history or remote state. Redirects
+// to /dev/null, $null or 2>&1 do not count as writes.
+export function shellChanges(cmd) {
+  const c = String(cmd || '').replace(/\d?>\s*(?:&\d|\/dev\/null|\$null|nul)\b/gi, '');
+  return (
+    /\bgit\s+(?:commit|push|merge|cherry-pick|rebase|revert|apply|am)\b/.test(c) ||
+    /\bgh\s+(?:pr|issue)\s+(?:create|merge|comment|edit|close)\b/.test(c) ||
+    /\bsed\s+(?:-[a-zA-Z]*i|--in-place)/.test(c) ||
+    /(?:^|[^<>&\d])>{1,2}\s*[^\s&|>]/.test(c) ||
+    /\b(?:tee|mv|cp|rm|mkdir|touch)\s/.test(c) ||
+    /\b(?:writeFileSync|appendFileSync|Set-Content|Add-Content|Out-File|New-Item|Remove-Item|Copy-Item|Move-Item)\b/.test(c)
+  );
+}
 
 function reflectDue(p) {
   if (!p.transcript_path || !p.session_id) return false;
   let work = 0;
+  let calls = 0;
   try {
     for (const line of fs.readFileSync(p.transcript_path, 'utf8').split('\n')) {
       if (!line.includes('"tool_use"')) continue;
@@ -138,9 +157,9 @@ function reflectDue(p) {
       if (!Array.isArray(content)) continue;
       for (const c of content) {
         if (c?.type !== 'tool_use') continue;
+        calls++;
         if (WORK_TOOLS.has(c.name)) work++;
-        else if (c.name === 'Bash' && /\bgit\s+(commit|push)\b/.test(c.input?.command || ''))
-          work++;
+        else if (SHELL_TOOLS.has(c.name) && shellChanges(c.input?.command)) work++;
       }
     }
   } catch {
@@ -148,14 +167,14 @@ function reflectDue(p) {
   }
   const stateDir = path.join(os.tmpdir(), 'amr-reflect');
   const stateFile = path.join(stateDir, `${String(p.session_id).replace(/[^\w-]/g, '_')}.json`);
-  let seen = 0;
+  let seen = { work: 0, calls: 0 };
   try {
-    seen = JSON.parse(fs.readFileSync(stateFile, 'utf8')).work || 0;
+    seen = { ...seen, ...JSON.parse(fs.readFileSync(stateFile, 'utf8')) };
   } catch {}
-  if (work - seen < REFLECT_MIN_WORK) return false;
+  if (work - seen.work < REFLECT_MIN_WORK && calls - seen.calls < REFLECT_MIN_CALLS) return false;
   try {
     fs.mkdirSync(stateDir, { recursive: true });
-    fs.writeFileSync(stateFile, JSON.stringify({ work }));
+    fs.writeFileSync(stateFile, JSON.stringify({ work, calls }));
   } catch {}
   return true;
 }

@@ -327,3 +327,76 @@ test('AMR_REFLECT_AUTOSAVE saves new entries directly; updates still wait for re
   assert.match(body, /warm the Go cache/); // not rewritten
   assert.match(read(pendingFile(amrHome)), new RegExp('update ' + id));
 });
+
+function toolTranscript(dir, name, calls) {
+  const file = path.join(dir, `${name}.jsonl`);
+  fs.writeFileSync(
+    file,
+    calls
+      .map(([tool, command]) =>
+        JSON.stringify({
+          type: 'assistant',
+          message: { content: [{ type: 'tool_use', name: tool, input: { command } }] },
+        })
+      )
+      .join('\n')
+  );
+  return file;
+}
+
+test('reflect counts shell writes as work and long investigations as due', () => {
+  const { amrHome, fakeHome } = setup();
+  const hook = (sid, transcript_path) =>
+    run(['reflect'], {
+      amrHome,
+      fakeHome,
+      env: { AMR_REFLECT: 'block' },
+      input: JSON.stringify({ session_id: `${sid}-${path.basename(fakeHome)}`, transcript_path }),
+    }).stdout;
+  // Six changing shell commands, no Edit/Write tool at all.
+  const shellWork = toolTranscript(fakeHome, 'shell', [
+    ['Bash', 'sed -i s/a/b/ f.txt'],
+    ['Bash', 'echo x > out.txt'],
+    ['PowerShell', 'Set-Content f.txt x'],
+    ['Bash', 'git commit -m fix'],
+    ['Bash', 'git push origin HEAD'],
+    ['Bash', 'gh pr create --base main'],
+  ]);
+  assert.match(hook('shell', shellWork), /"decision":"block"/);
+  // Read-only shell commands are not work...
+  const reads = Array(10).fill(['Bash', 'git log --oneline 2>&1']);
+  assert.equal(hook('reads', toolTranscript(fakeHome, 'reads', reads)), '');
+  // ...but a long investigation is due even without edits.
+  const investigation = Array(20).fill(['Bash', 'grep -rn foo src']);
+  assert.match(hook('probe', toolTranscript(fakeHome, 'probe', investigation)), /"decision":"block"/);
+});
+
+test('the judge transcript keeps failing tool output, drops secrets, keeps head and tail', async () => {
+  const { transcriptText } = await import('../lib/reflect.mjs');
+  const dir = tmpdir();
+  const file = path.join(dir, 't.jsonl');
+  const rows = [
+    { type: 'user', message: { content: 'EARLY: why does CI fail?' } },
+    {
+      type: 'user',
+      message: {
+        content: [
+          { type: 'tool_result', is_error: false, content: 'Error: Timed out waiting for ROUND_START' },
+          { type: 'tool_result', content: [{ type: 'text', text: 'all 50 tests passed' }] },
+          { type: 'tool_result', content: 'error: token ghp_abcdefghijklmnopqrstuvwxyz0123456789 rejected' },
+        ],
+      },
+    },
+    ...Array(200).fill({ type: 'assistant', message: { content: 'filler '.repeat(20) } }),
+    { type: 'assistant', message: { content: 'LATE: fixed by relaxing the round pace' } },
+  ];
+  fs.writeFileSync(file, rows.map((r) => JSON.stringify(r)).join('\n'));
+  const t = transcriptText(file);
+  assert.match(t, /EARLY: why does CI fail/);
+  assert.match(t, /LATE: fixed by relaxing/);
+  assert.match(t, /middle of session omitted/);
+  assert.match(t, /TOOL RESULT: Error: Timed out waiting for ROUND_START/);
+  assert.doesNotMatch(t, /all 50 tests passed/);
+  assert.doesNotMatch(t, /ghp_/);
+  assert.ok(t.length <= 14100, `transcript is ${t.length} chars`);
+});
