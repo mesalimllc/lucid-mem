@@ -118,7 +118,7 @@ test('outside context pools latest project entries; private and noglobal exclude
   assert.ok(!r.stdout.includes('pd quiet fact'));
 });
 
-test('context ranks by kind/recency within a budget; search usage boosts entries', () => {
+test('context ranks by kind/recency within a budget; `amr used` boosts entries, search does not', () => {
   const home = tmpdir();
   const run0 = (args) => run(args, { amrHome: home });
   run0(['ensure']);
@@ -132,8 +132,11 @@ test('context ranks by kind/recency within a budget; search usage boosts entries
   assert.match(tight, /When CI flakes/);
   assert.match(tight, /lower-ranked entries omitted/);
   assert.equal((tight.match(/old filler fact/g) || []).length, 2);
-  // usage boost: searching for one old entry should lift it above its peers
+  // Surfacing an entry in a search is not a use: it must not rank higher.
   run0(['search', 'number 7']);
+  assert.doesNotMatch(run0(['context', '--budget', '10']).stdout, /number 7/);
+  // Marking it used (it helped) lifts it above its peers.
+  assert.match(run0(['used', 'a007']).stdout, /marked used: a007/);
   const after = run0(['context', '--budget', '10']).stdout;
   assert.match(after, /number 7/);
   assert.match(run0(['context', '--full']).stdout, /number 0/);

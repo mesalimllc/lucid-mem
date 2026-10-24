@@ -32,7 +32,8 @@ import {
   withLock,
 } from './core.mjs';
 import { DEFAULT_BUDGET, bumpUsage, loadUsage, pickWithinBudget } from './rank.mjs';
-import { ID_RE, entryId, findById, newId, scanIds } from './ids.mjs';
+import { ID_RE, findById, newId, scanIds } from './ids.mjs';
+import { drainReflections, pendingReflectionLines } from './pending.mjs';
 
 const out = (s = '') => process.stdout.write(s + '\n');
 const err = (s) => process.stderr.write(s + '\n');
@@ -273,16 +274,19 @@ export function cmdContext(flags) {
   // Unsaved-signal queue from the last `amr coverage` run: durable
   // statements that were never saved. Same surface in both modes; the
   // next session reviews and saves the real ones.
+  // Background-reflection proposals (pending.mjs) share the section: both
+  // are unsaved and wait for a session to accept or ignore them.
   const pending = path.join(home, 'dreams', 'pending-saves.md');
-  if (fs.existsSync(pending)) {
-    const items = bullets(fs.readFileSync(pending, 'utf8')).slice(0, 8);
-    if (items.length)
-      lines.push(
-        '',
-        '## Pending memory candidates (unsaved — review, `amr add` the real ones)',
-        items.join('\n')
-      );
-  }
+  const items = [
+    ...pendingReflectionLines(home),
+    ...(fs.existsSync(pending) ? bullets(fs.readFileSync(pending, 'utf8')) : []),
+  ].slice(0, 8);
+  if (items.length)
+    lines.push(
+      '',
+      '## Pending memory candidates (unsaved — review, `amr add` / `amr update <id>` the real ones)',
+      items.join('\n')
+    );
   if (indexLinks.length) lines.push('', '## Index', indexLinks.join('\n'));
   if (unknown.length)
     lines.push(
@@ -435,6 +439,7 @@ export function cmdAdd(text, flags) {
     return 'saved';
   });
 
+  drainReflections(home, text);
   if (result === 'duplicate') out('already saved');
   else {
     if (hasRemote(home))
@@ -490,6 +495,7 @@ export function cmdUpdate(match, text, flags) {
     fs.writeFileSync(t.abs, lines.join('\n'));
     commit(home, [t.rel], `Update memory: ${text.slice(0, 50)}`);
   });
+  drainReflections(home, text);
   if (hasRemote(home)) git(home, ['push'], { timeout: 10000 });
   const eid = (lines[i].match(/\bid:\s*([0-9a-f]{4,8})\b/) || [])[1];
   out(`updated ${t.rel}${eid ? ` [id ${eid}]` : ''}`);
@@ -499,15 +505,9 @@ export function cmdSearch(term) {
   const home = ensureRepo();
   const r = git(home, ['grep', '-n', '-i', '--', term]);
   if (r.code !== 0 || !r.stdout) out('no matches');
-  else {
-    out(r.stdout);
-    // Surfacing an entry in a search counts as a use: it ranks higher in
-    // future `amr context` digests, unused ones fade toward search-only.
-    bumpUsage(
-      home,
-      [...new Set(r.stdout.split('\n').map(entryId).filter(Boolean))]
-    );
-  }
+  // Surfacing is not using: counting search hits would keep promoting
+  // whatever already matches common terms. Only `amr used` ranks entries.
+  else out(r.stdout);
 }
 
 // amr used <id...> — mark entries that actually helped.

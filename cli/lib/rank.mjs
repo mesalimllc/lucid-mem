@@ -1,8 +1,8 @@
 // Relevance ranking for `amr context`: instead of "newest 25", pick the
 // entries most likely to help a fresh session, within a size budget.
 // Score = kind weight x recency decay x usage boost, with a penalty for
-// session-state-shaped noise. Usage (which entries searches surfaced or
-// the agent marked via `amr used`) lives in .git/amr-usage.json — local,
+// session-state-shaped noise. Usage (entries the agent marked via
+// `amr used` because they helped) lives in .git/amr-usage.json — local,
 // never committed, so ranking is per-machine.
 
 import fs from 'node:fs';

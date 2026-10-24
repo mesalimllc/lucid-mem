@@ -220,36 +220,110 @@ function readLines(file) {
     .filter(Boolean);
 }
 
-test('reflect-run saves judge entries, skipping episodic ones', () => {
-  const { amrHome, fakeHome } = setup();
-  const repo = initRepo(tmpdir());
+// A judge stub that records the prompt it was given and replies with
+// a fixed JSON array.
+function stubJudge(fakeHome, reply) {
+  const judge = path.join(fakeHome, 'stub-judge.mjs');
+  const seen = path.join(fakeHome, 'judge-prompt.txt');
+  fs.writeFileSync(
+    judge,
+    'import fs from "node:fs";' +
+      'fs.writeFileSync(' + JSON.stringify(seen) + ', fs.readFileSync(0, "utf8"));' +
+      'console.log(' + JSON.stringify(JSON.stringify(reply)) + ');'
+  );
+  return { judge, seen };
+}
+
+function reflectRun({ amrHome, fakeHome, repo, reply, env = {} }) {
   const transcript = path.join(fakeHome, 'convo.jsonl');
   fs.writeFileSync(
     transcript,
     JSON.stringify({ type: 'user', message: { content: 'ci flaked again' } })
   );
-  const judge = path.join(fakeHome, 'good-judge.mjs');
-  fs.writeFileSync(
-    judge,
-    'console.log(JSON.stringify([' +
-      '{text:"When CI flakes, re-run once before debugging, because runners are flaky",project:true},' +
-      '{text:"PR #788 open, commit 1f06cc1b not pushed",project:true}]))'
-  );
+  const { judge, seen } = stubJudge(fakeHome, reply);
   const payload = path.join(fakeHome, 'payload.json');
-  fs.writeFileSync(
-    payload,
-    JSON.stringify({ transcript_path: transcript, cwd: repo })
-  );
+  fs.writeFileSync(payload, JSON.stringify({ transcript_path: transcript, cwd: repo }));
   const r = run(['reflect-run', payload], {
     amrHome,
     fakeHome,
-    env: { AMR_JUDGE_CMD: `"${process.execPath}" "${judge}"`, AMR_REFLECT_JUDGE: 'env' },
+    env: { AMR_JUDGE_CMD: '"' + process.execPath + '" "' + judge + '"', AMR_REFLECT_JUDGE: 'env', ...env },
   });
   assert.equal(r.status, 0, r.stderr);
-  const files = fs.readdirSync(path.join(amrHome, 'projects'));
-  assert.equal(files.length, 1);
-  const body = read(path.join(amrHome, 'projects', files[0]));
-  assert.match(body, /re-run once before debugging/);
-  assert.doesNotMatch(body, /PR #788/);
   assert.equal(r.stdout, '');
+  return { prompt: fs.readFileSync(seen, 'utf8') };
+}
+
+const pendingFile = (amrHome) => path.join(amrHome, 'dreams', 'pending-reflections.md');
+
+test('reflect-run queues judge proposals for review instead of saving them', () => {
+  const { amrHome, fakeHome } = setup();
+  const repo = initRepo(tmpdir());
+  run(['add', '--project', 'When the drift gate flakes, warm the Go cache, because cold rebuilds time out'], {
+    amrHome, fakeHome, cwd: repo,
+  });
+  const body0 = read(path.join(amrHome, 'projects', fs.readdirSync(path.join(amrHome, 'projects'))[0]));
+  const id = body0.match(/id: ([0-9a-f]{4,8})/)[1];
+
+  const { prompt } = reflectRun({
+    amrHome, fakeHome, repo,
+    reply: [
+      { op: 'add', text: 'When CI flakes, re-run once before debugging, because runners are flaky', project: true, kind: 'pitfall' },
+      { op: 'add', text: 'PR #788 open, commit 1f06cc1b not pushed', project: true },
+      // restates saved memory: dropped
+      { op: 'add', text: 'When the drift gate flakes, warm the Go cache because cold rebuilds time out', project: true },
+      { op: 'update', id, text: 'When the drift gate flakes, run go test ./... first to warm the cache, because cold rebuilds time out' },
+      { op: 'update', id: 'ffff', text: 'update to an id the judge was never shown' },
+    ],
+  });
+
+  // The judge saw existing memory, addressed by id.
+  const memoryBlock = prompt.slice(prompt.indexOf('<memory>'), prompt.indexOf('</memory>'));
+  assert.ok(memoryBlock.includes(`${id}: When the drift gate flakes`), memoryBlock);
+  // Nothing new was written to memory.
+  assert.equal(read(path.join(amrHome, 'projects', fs.readdirSync(path.join(amrHome, 'projects'))[0])), body0);
+  const queue = read(pendingFile(amrHome));
+  assert.match(queue, /add pitfall project: When CI flakes, re-run once/);
+  assert.match(queue, new RegExp('update ' + id + ': When the drift gate flakes, run go test'));
+  assert.doesNotMatch(queue, /PR #788/);
+  assert.doesNotMatch(queue, /warm the Go cache because/);
+  assert.doesNotMatch(queue, /ffff/);
+
+  // The next session sees the proposals; saving one drains it.
+  const ctx = run(['context'], { amrHome, fakeHome, cwd: repo }).stdout;
+  assert.match(ctx, /Pending memory candidates[\s\S]*When CI flakes, re-run once/);
+  run(['add', '--project', 'When CI flakes, re-run once before debugging, because runners are flaky'], {
+    amrHome, fakeHome, cwd: repo,
+  });
+  const after = read(pendingFile(amrHome));
+  assert.doesNotMatch(after, /When CI flakes/);
+  assert.match(after, new RegExp('update ' + id));
+
+  // A repeat reflection does not queue the same proposal twice.
+  reflectRun({
+    amrHome, fakeHome, repo,
+    reply: [{ op: 'update', id, text: 'When the drift gate flakes, run go test ./... first to warm the cache, because cold rebuilds time out' }],
+  });
+  assert.equal((read(pendingFile(amrHome)).match(/^- \[reflect\] .* update /gm) || []).length, 1);
+});
+
+test('AMR_REFLECT_AUTOSAVE saves new entries directly; updates still wait for review', () => {
+  const { amrHome, fakeHome } = setup();
+  const repo = initRepo(tmpdir());
+  run(['add', '--project', 'When the drift gate flakes, warm the Go cache, because cold rebuilds time out'], {
+    amrHome, fakeHome, cwd: repo,
+  });
+  const file = path.join(amrHome, 'projects', fs.readdirSync(path.join(amrHome, 'projects'))[0]);
+  const id = read(file).match(/id: ([0-9a-f]{4,8})/)[1];
+  reflectRun({
+    amrHome, fakeHome, repo,
+    env: { AMR_REFLECT_AUTOSAVE: '1' },
+    reply: [
+      { op: 'add', text: 'When CI flakes, re-run once before debugging, because runners are flaky', project: true, kind: 'pitfall' },
+      { op: 'update', id, text: 'When the drift gate flakes, run go test ./... first, because cold rebuilds time out' },
+    ],
+  });
+  const body = read(file);
+  assert.match(body, /re-run once before debugging.*kind: pitfall/);
+  assert.match(body, /warm the Go cache/); // not rewritten
+  assert.match(read(pendingFile(amrHome)), new RegExp('update ' + id));
 });
