@@ -112,6 +112,15 @@ test('dream --triage plans first, then --apply keeps, rewrites and archives', ()
   // A rewrite keeps its original in the archive too.
   assert.match(archive, /raised to 120s in a6ca4a54/);
   assert.match(run(['search', '93372492'], { amrHome: home }).stdout, /archive\/MEMORY\.md/);
+  assert.ok(
+    archive.includes('raised to 120s in a6ca4a54 (PR #770) [added: 2026-10-22; rewritten-to: a002]'),
+    archive
+  );
+  // The rewritten entry stays addressable by its id.
+  assert.match(run(['used', 'a002'], { amrHome: home }).stdout, /marked used: a002/);
+  const u = run(['update', 'a002', 'The worker vitest testTimeout is 120 seconds.'], { amrHome: home });
+  assert.equal(u.status, 0, u.stderr);
+  assert.match(read(mem), /testTimeout is 120 seconds/);
   assert.equal(fs.existsSync(path.join(home, 'dreams', 'triage-plan.json')), false);
 });
 

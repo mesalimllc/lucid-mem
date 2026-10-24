@@ -130,11 +130,15 @@ const REFLECT_MIN_CALLS = 20;
 // to /dev/null, $null or 2>&1 do not count as writes.
 export function shellChanges(cmd) {
   const c = String(cmd || '').replace(/\d?>\s*(?:&\d|\/dev\/null|\$null|nul)\b/gi, '');
+  // For the redirect test only: quoted strings (inline scripts, jq or
+  // awk filters) become a placeholder and arrows/comparisons drop, so
+  // `node -e "x.map(a=>a)"` or `jq '.n > 1'` is not a write.
+  const bare = c.replace(/'[^']*'|"[^"]*"/g, 'Q').replace(/=>|>=/g, '');
   return (
     /\bgit\s+(?:commit|push|merge|cherry-pick|rebase|revert|apply|am)\b/.test(c) ||
     /\bgh\s+(?:pr|issue)\s+(?:create|merge|comment|edit|close)\b/.test(c) ||
     /\bsed\s+(?:-[a-zA-Z]*i|--in-place)/.test(c) ||
-    /(?:^|[^<>&\d])>{1,2}\s*[^\s&|>]/.test(c) ||
+    /(?:^|[^<>&\d])>{1,2}\s*[^\s&|>]/.test(bare) ||
     /\b(?:tee|mv|cp|rm|mkdir|touch)\s/.test(c) ||
     /\b(?:writeFileSync|appendFileSync|Set-Content|Add-Content|Out-File|New-Item|Remove-Item|Copy-Item|Move-Item)\b/.test(c)
   );

@@ -209,7 +209,10 @@ function apply(home) {
         } else {
           // Rewrites can drop detail the judge judged incidental; the
           // original goes to the archive so `amr search` still finds it.
-          archived.push(lines[i]);
+          // The live entry keeps the id (usage, updates); the archived
+          // copy is tagged rewritten-to instead, since id lookups scan
+          // archive/ too and refuse ambiguous ids.
+          archived.push(lines[i].replace(/\bid:\s*([0-9a-f]{4,8})\b/, 'rewritten-to: $1'));
           const meta = (lines[i].match(META) || [''])[0];
           lines[i] = withKind(`- ${it.text}${meta}`, it.kind);
         }

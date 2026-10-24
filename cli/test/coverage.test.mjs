@@ -363,8 +363,13 @@ test('reflect counts shell writes as work and long investigations as due', () =>
     ['Bash', 'gh pr create --base main'],
   ]);
   assert.match(hook('shell', shellWork), /"decision":"block"/);
-  // Read-only shell commands are not work...
-  const reads = Array(10).fill(['Bash', 'git log --oneline 2>&1']);
+  // Read-only shell commands are not work, including inline scripts
+  // and filters whose arrows or comparisons look like redirects...
+  const reads = [
+    ...Array(8).fill(['Bash', 'git log --oneline 2>&1']),
+    ['Bash', 'node -e "[1].map(a=>a)"'],
+    ['Bash', "jq '.n > 1' f.json"],
+  ];
   assert.equal(hook('reads', toolTranscript(fakeHome, 'reads', reads)), '');
   // ...but a long investigation is due even without edits.
   const investigation = Array(20).fill(['Bash', 'grep -rn foo src']);
