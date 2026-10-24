@@ -22,6 +22,7 @@ import {
   numFlag,
   STATE_TTL_DAYS,
   addDays,
+  episodicHits,
   isExpired,
   projectFor,
   pullFfOnly,
@@ -403,17 +404,9 @@ function buildEntry(text, flags, proj, id) {
   return `- ${text.replace(/\s+/g, ' ').trim()} [${meta.join('; ')}]`;
 }
 
-// Session state goes stale within hours and crowds out durable knowledge.
-const EPISODIC = [
-  [/\b(?=[0-9a-f]*\d)[0-9a-f]{7,40}\b/i, 'commit SHA'],
-  [/\b(?:PR|pull request)\s*#?\d+|#\d{2,}\b/i, 'PR/issue number'],
-  [/\b(?:run|job)\s*(?:id\s*)?\d{8,}\b|\b\d{10,}\b/i, 'run ID'],
-  [/\b(?:not pushed|just committed|currently open)\b/i, 'session state'],
-];
-
-export function episodicHits(text) {
-  return EPISODIC.filter(([re]) => re.test(text)).map(([, label]) => label);
-}
+// Moved to core.mjs so dream's backlog pass can share it; re-exported
+// for existing importers.
+export { episodicHits };
 
 export function cmdAdd(text, flags) {
   const home = ensureRepo();

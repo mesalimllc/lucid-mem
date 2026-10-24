@@ -309,6 +309,18 @@ export const trailingMeta = (line) =>
 export const entryKind = (line) =>
   (trailingMeta(line).match(/kind:\s*([a-z-]+)/) || [])[1] || null;
 
+// Session state goes stale within hours and crowds out durable knowledge.
+const EPISODIC = [
+  [/\b(?=[0-9a-f]*\d)[0-9a-f]{7,40}\b/i, 'commit SHA'],
+  [/\b(?:PR|pull request)\s*#?\d+|#\d{2,}\b/i, 'PR/issue number'],
+  [/\b(?:run|job)\s*(?:id\s*)?\d{8,}\b|\b\d{10,}\b/i, 'run ID'],
+  [/\b(?:not pushed|just committed|currently open)\b/i, 'session state'],
+];
+
+export function episodicHits(text) {
+  return EPISODIC.filter(([re]) => re.test(text)).map(([, label]) => label);
+}
+
 // An entry is expired when its expires: date is before `now` (YYYY-MM-DD).
 export const isExpired = (line, now = today()) => {
   const d = (trailingMeta(line).match(/expires:\s*(\d{4}-\d{2}-\d{2})/) || [])[1];
