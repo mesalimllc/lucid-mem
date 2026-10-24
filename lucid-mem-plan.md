@@ -53,8 +53,8 @@ lucid-mem/                           (this repo; spec lives upstream)
     lib/commands.mjs                 ensure, context, add, update, search, index,
                                      remote, sync, doctor
     lib/install.mjs                  per-host adapter writer (merge + backup)
-  adapters/shared/rule-block.md      canonical always-on instruction block
-  skills/agent-memory-repo/SKILL.md  rewritten later: autonomous layer = default;
+  cli/lib/rule-block.md              canonical always-on instruction block
+  skills/lucid-mem/SKILL.md  rewritten later: autonomous layer = default;
                                      skill = manual ops fallback
   lucid-mem-plan.md                  this file
 ```
@@ -82,13 +82,13 @@ hook must never break or hang a session. Repo location: `$AMR_HOME`, default
 
 | Host | Retrieval | Save | Sync |
 |---|---|---|---|
-| Cursor | `sessionStart` → `amr context` (merged into `~/.cursor/hooks.json`) | `~/.cursor/rules/agent-memory-repo.mdc` (`alwaysApply: true`) | `sessionEnd` → `amr sync` |
+| Cursor | `sessionStart` → `amr context` (merged into `~/.cursor/hooks.json`) | `~/.cursor/rules/lucid-mem.mdc` (`alwaysApply: true`) | `sessionEnd` → `amr sync` |
 | Claude Code | `SessionStart` hook in `~/.claude/settings.json` | `~/.claude/CLAUDE.md` marked block | `SessionEnd` → `amr sync` |
 | Windsurf | `~/.codeium/windsurf/hooks.json` `sessionStart` (verify event names) | `~/.codeium/windsurf/memories/global_rules.md` block | `sessionEnd` equiv |
 | Devin CLI | settings hooks key unverified → `~/AppData/Roaming/devin/AGENTS.md` block instructs `amr context` at session start | same block | same block |
 | Copilot CLI | `~/.copilot/AGENTS.md` block | same block | — |
 | Codex CLI | `~/.codex/AGENTS.md` block (no injectable hook; `notify` is fire-and-forget) | same block | — |
-| Cline | `~/Documents/Cline/Rules/agent-memory-repo.md` + `~/.cline/AGENTS.md` block (global hooks unverified) | same blocks | — |
+| Cline | `~/Documents/Cline/Rules/lucid-mem.md` + `~/.cline/AGENTS.md` block (global hooks unverified) | same blocks | — |
 | Muse (muse-code) | `~/AppData/Local/hermes/SOUL.md` block | same block | — |
 | Claude Desktop | `amr serve` MCP tools via `claude_desktop_config.json` | same | — |
 
@@ -99,8 +99,8 @@ hooks/rules stay primary where they exist; for Claude Desktop it is the only cha
 
 Hook commands use absolute `node "<cli>/amr.mjs"` paths — immune to PATH issues.
 Rule block references `amr` and notes the absolute fallback. Shared canonical block
-in `adapters/shared/rule-block.md`, stamped between
-`<!-- agent-memory-repo -->` markers.
+in `cli/lib/rule-block.md`, stamped between
+`<!-- lucid-mem -->` markers.
 
 ## Multi-repo model
 

@@ -1,5 +1,5 @@
 ---
-name: agent-memory-repo
+name: lucid-mem
 description: Keep memory across sessions in a separate local git repo that follows the Agent Memory Repo spec. Use when the user invokes this skill, asks you to remember something for future sessions, or asks what you remember.
 ---
 
