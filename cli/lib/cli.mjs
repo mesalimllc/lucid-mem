@@ -48,6 +48,7 @@ usage: amr <command> [args] [flags]
   sync                          pull --rebase + push (no-op without a remote)
   doctor                        check repo, PATH, and per-host wiring
   dream [--days N] [--fix] [--compact] [--keep N] [--json]   memory health; --fix cleans up, --compact archives overflow; --spin plays the animation
+  dream --triage [--limit N] [--apply]   judge sorts session-state-looking entries into keep/rewrite/archive; plan first, --apply to commit it
   harvest [--days N] [--json] [--extract] [--max N] [--min C]   list transcripts; --extract streams normalized user messages
   discover [--days N] [--min N] [--json]   rank repos by transcript mentions; shows memory coverage + suggested links
   coverage [--days N] [--json] [--no-log] [--judge claude|codex|env]  save-rate metric: durable transcript signals vs memory repo
@@ -70,7 +71,7 @@ flags:
 // only in the `--project=name` form.
 const BOOL_FLAGS = new Set([
   'project', 'full', 'json', 'fix', 'compact', 'inline', 'spin',
-  'extract', 'no-log', 'allow-secret',
+  'extract', 'no-log', 'allow-secret', 'if-stale-off', 'triage', 'apply',
 ]);
 
 function parseFlags(argv) {

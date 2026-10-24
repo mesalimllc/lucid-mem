@@ -9,6 +9,7 @@ import {
   withLock,
 } from './core.mjs';
 import { backfillIds } from './ids.mjs';
+import { cmdTriage } from './triage.mjs';
 
 const out = (s = '') => process.stdout.write(s + '\n');
 const err = (s) => process.stderr.write(s + '\n');
@@ -200,6 +201,9 @@ export function cmdDream(flags) {
     }, 2600);
     return;
   }
+  // Judge-backed backlog triage is opt-in and separate from --fix, which
+  // the session-end hook runs unattended.
+  if (flags.triage) return cmdTriage(flags);
   const home = ensureRepo();
   const staleDays = numFlag(flags.days ?? '90', 90);
 
