@@ -100,3 +100,30 @@ test('install --host codex writes rules + mcp into a fake home, idempotent', () 
   assert.equal(r2.status, 0);
   assert.match(r2.stdout + r2.stderr, /unchanged|already/);
 });
+
+test('install --host with one unknown name fails before installing anything', () => {
+  const home = tmpdir();
+  const fakeHome = tmpdir();
+  run(['ensure'], { amrHome: home });
+  const r = run(['install', '--host', 'codex,bogus'], { amrHome: home, fakeHome });
+  assert.notEqual(r.status, 0);
+  assert.match(r.stderr, /unknown host\(s\): bogus/);
+  // codex was valid, but nothing is installed when any name is a typo
+  assert.equal(fs.existsSync(path.join(fakeHome, '.codex')), false);
+});
+
+test('install leaves an unparseable MCP config untouched and exits nonzero', () => {
+  const home = tmpdir();
+  const fakeHome = tmpdir();
+  run(['ensure'], { amrHome: home });
+  const mcp = path.join(fakeHome, '.cursor', 'mcp.json');
+  fs.mkdirSync(path.dirname(mcp), { recursive: true });
+  const broken = '{ "mcpServers": { "other": { "command": "x" } }, // trailing comment\n';
+  fs.writeFileSync(mcp, broken);
+  const r = run(['install', '--host', 'cursor'], { amrHome: home, fakeHome });
+  assert.notEqual(r.status, 0);
+  assert.match(r.stdout, /mcp skipped \(unparseable\)/);
+  assert.match(r.stderr, /install incomplete for: cursor/);
+  // The app's config, and its other servers, survive byte-for-byte.
+  assert.equal(fs.readFileSync(mcp, 'utf8'), broken);
+});

@@ -259,13 +259,17 @@ const HOSTS = {
 
 const MCP_ENTRY = { command: 'node', args: [CLI_ENTRY, 'serve'] };
 
+// Never clobber an unparseable config: rewriting it as {} plus our entry
+// would drop every other MCP server the app relies on. Same contract as
+// mergeMcpOpencode; cmdInstall counts the skip as a host failure.
 function mergeMcpJson(file, entry = MCP_ENTRY) {
   let cfg = {};
   if (fs.existsSync(file)) {
+    const text = fs.readFileSync(file, 'utf8');
     try {
-      cfg = JSON.parse(fs.readFileSync(file, 'utf8'));
+      cfg = JSON.parse(text);
     } catch {
-      cfg = {};
+      return text.includes('"agent-memory"') ? false : 'skipped (unparseable)';
     }
   }
   if (cfg.mcpServers?.['agent-memory']) return false;
@@ -451,8 +455,20 @@ function stampBlock(file, content, { append }) {
 
 export function cmdInstall(flags) {
   const requested = flags.host
-    ? String(flags.host).split(',').map((s) => s.trim())
+    ? String(flags.host).split(',').map((s) => s.trim()).filter(Boolean)
     : null;
+  // Validate every requested name before touching any host, so a typo in
+  // `--host codex,bogus` fails the run instead of being silently dropped.
+  if (requested) {
+    const bad = requested.filter((r) => r !== 'all' && !Object.keys(HOSTS).includes(r));
+    if (bad.length) {
+      process.stderr.write(
+        `unknown host(s): ${bad.join(', ')} (known: ${Object.keys(HOSTS).join(', ')})\n`
+      );
+      process.exitCode = 1;
+      return;
+    }
+  }
   const names = Object.keys(HOSTS).filter(
     (n) =>
       requested
@@ -460,19 +476,10 @@ export function cmdInstall(flags) {
         : HOSTS[n].detect()
   );
   if (!names.length) {
-    if (requested && !requested.includes('all')) {
-      const bad = requested.filter((r) => !Object.keys(HOSTS).includes(r));
-      if (bad.length) {
-        process.stderr.write(
-          `unknown host(s): ${bad.join(', ')} (known: ${Object.keys(HOSTS).join(', ')})\n`
-        );
-        process.exitCode = 1;
-        return;
-      }
-    }
     out('no known agent hosts detected; use --host <name> to force');
     return;
   }
+  const failed = [];
   for (const name of names) {
     const h = HOSTS[name];
     const did = [];
@@ -511,10 +518,13 @@ export function cmdInstall(flags) {
       }
       if (h.mcpJson) {
         const file = h.mcpJson();
+        const res = mergeMcpJson(file, h.mcpEntry);
         did.push(
-          mergeMcpJson(file, h.mcpEntry)
+          res === true
             ? `mcp +agent-memory in ${file}`
-            : `mcp already wired in ${file}`
+            : res === false
+            ? `mcp already wired in ${file}`
+            : `mcp ${res}: ${file}`
         );
       }
       if (h.mcpToml) {
@@ -538,11 +548,19 @@ export function cmdInstall(flags) {
       }
     } catch (e) {
       err(`${name}: ${e.message}`);
+      failed.push(name);
       continue;
     }
     for (const d of did) out(`${name}: ${d}`);
+    // A config left untouched because it could not be parsed means the
+    // host is not wired; automation must see that as a failure.
+    if (did.some((d) => d.includes('skipped (unparseable)'))) failed.push(name);
   }
   out('');
+  if (failed.length) {
+    err(`install incomplete for: ${failed.join(', ')}`);
+    process.exitCode = 1;
+  }
   out('verify with: amr doctor');
 }
 
