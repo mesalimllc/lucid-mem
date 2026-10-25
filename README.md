@@ -35,13 +35,13 @@ This release fixes the failure mode every memory system eventually hits: accumul
 
 | Area | What shipped | Why it matters |
 |---|---|---|
-| **Quieter reflection** | `amr reflect` fires only after real work — six or more write/commit/push actions, or twenty tool calls — and runs as a detached background judge. Nothing prints in the session. | Memory improves without interrupting the person doing the work. |
+| **Quieter reflection** | `amr reflect` fires only after real work — six or more changing actions (edits, or shell commands that write, commit, or push), or twenty tool calls of any kind, which also catches investigation-only sessions — and runs as a detached background judge. Nothing prints in the session. | Memory improves without interrupting the person doing the work. |
 | **Reviewable learning** | Judge proposals land in `dreams/pending-reflections.md` and surface at the next session. Adds can auto-save; updates always wait for review. | The agent can learn without silently rewriting what you know. |
 | **Kinds and expiry** | Entries carry `pitfall`, `decision`, `preference`, `fact`, `howto`, or `state`. State entries expire after two days and drop out of context and cleanup. | Memory becomes a durable knowledge base, not a status feed. |
 | **Stable identity** | Every entry gets a short id such as `a3f9`: `amr update <id>`, `amr supersede <id>`, `amr used <id>`, `amr ids`. | Memory can be corrected, retired, and credited instead of appended forever. |
 | **Ranked context** | `amr context` ranks by kind, recency (60-day half-life), and explicit use inside a shared 6,000-character budget (`--budget`, `contextBudget`). `--full` opts out. | The digest stays small and relevant as the corpus grows. |
 | **Backlog triage** | `amr dream --triage` asks the judge to keep, rewrite, or archive legacy state-like entries. It writes a plan to `dreams/triage-plan.json`; `--apply` executes it. | Legacy untyped memory can become useful again — with a review step. |
-| **Better judge input** | The judge sees existing memory, failing tool output, and both the head and tail of long transcripts. Secret-shaped content is filtered. | The model judges with the evidence that actually explains a lesson. |
+| **Better judge input** | The judge sees existing memory, failing tool output, and both the head and tail of long transcripts. Credential values in tool output are redacted first; anything still secret-shaped is dropped. | The model judges with the evidence that actually explains a lesson. |
 | **Wider coverage** | Gemini CLI and Zed join the host matrix. Gemini CLI shares `GEMINI.md` with Antigravity; Zed's JSONC settings are preserved. | One memory follows the engineer across more of their tools. |
 
 Triage rewrites archive their original wording. Superseded entries move to `archive/superseded.md`. The system is designed to be reversible.
@@ -151,12 +151,12 @@ One memory repo serves every project. Project files live at `projects/<name>-<ha
 - A secret denylist (`sk-`, `ghp_`, `github_pat_`, `AKIA`, key blocks, `xox*`, JWTs) runs before every write; `--allow-secret` is explicit.
 - Retrieved memory is data, never instructions.
 - Hooks are bounded and quiet. Install fails closed on unknown hosts and broken configs; runtime hooks fail open so a session is never blocked.
-- Writes are atomic and serialized by `.git/amr.lock`; stale locks are broken; interrupted runs leave a recoverable tree, never a truncated file.
+- Writes are atomic and serialized by `.git/amr.lock`; a write that cannot acquire the lock fails closed instead of racing another writer, and stale locks are broken. Interrupted runs leave a recoverable tree, never a truncated file.
 - Triage and compaction move entries to `archive/`; they do not silently delete them.
 
 ## Honest limits
 
-- **Pre-1.0.** The CLI is 0.7.x; commands and config keys can still move.
+- **Pre-1.0.** The CLI is 0.8.x; commands and config keys can still move.
 - **Saving is probabilistic.** The rule block and reflection improve adherence; they cannot guarantee it. That is why `amr coverage` exists.
 - **Judges cost quota.** Reflection and triage are opt-in and use an installed agent CLI. Deterministic coverage works without them.
 - **Host coverage is uneven.** Hooks exist only where a host exposes them; some hosts are rules-only or MCP-only. Windsurf's Cascade transcripts are not harvested.
