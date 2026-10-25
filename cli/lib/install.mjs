@@ -269,7 +269,9 @@ function mergeMcpJson(file, entry = MCP_ENTRY) {
     try {
       cfg = JSON.parse(text);
     } catch {
-      return text.includes('"agent-memory"') ? false : 'skipped (unparseable)';
+      // Unparseable means the host cannot load its config: report a failure
+      // even when our entry is already there.
+      return 'skipped (unparseable)';
     }
   }
   if (cfg.mcpServers?.['agent-memory']) return false;
@@ -302,9 +304,9 @@ function mergeMcpOpencode(file) {
     try {
       cfg = JSON.parse(text);
     } catch {
-      // .jsonc or otherwise unparseable: already-wired counts as done,
-      // otherwise skip without clobbering.
-      return text.includes('"agent-memory"') ? false : 'skipped (unparseable)';
+      // .jsonc or otherwise unparseable: skip without clobbering, and let
+      // cmdInstall count it as a host failure.
+      return 'skipped (unparseable)';
     }
   }
   if (cfg.mcp?.['agent-memory']) return false;

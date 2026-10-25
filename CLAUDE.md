@@ -18,7 +18,7 @@ Run from `cli/`:
 ## Conventions
 
 - Entries are addressed by short hex IDs (`amr update <id>`), never substring matching.
-- Transient session data (CI runs, PR numbers, SHAs) is saved as `--kind state` so it expires; it must not become durable memory.
+- If transient session data (CI runs, PR numbers, SHAs) is intentionally saved, save it as `--kind state` so it expires; never save it as durable memory.
 - Only `amr used` counts as a usage signal for ranking. Search hits must not boost an entry.
 - `amr context` stays within its character budget; do not add output that bypasses the ranker.
 - Judge/reflect output goes to the review queue, not directly into memory.
