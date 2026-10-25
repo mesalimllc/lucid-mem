@@ -218,7 +218,10 @@ function apply(home) {
         }
         counts[it.action]++;
       }
-      fs.writeFileSync(file, lines.filter((l) => l !== null).join('\n'));
+      // Temp file then rename: a crash mid-write must not truncate memory.
+      const tmp = `${file}.${process.pid}.tmp`;
+      fs.writeFileSync(tmp, lines.filter((l) => l !== null).join('\n'));
+      fs.renameSync(tmp, file);
       touched.add(rel);
       if (archived.length) {
         const arel = `archive/${rel}`;
