@@ -388,6 +388,8 @@ test('the judge transcript keeps failing tool output, drops secrets, keeps head 
         content: [
           { type: 'tool_result', is_error: false, content: 'Error: Timed out waiting for ROUND_START' },
           { type: 'tool_result', content: [{ type: 'text', text: 'all 50 tests passed' }] },
+          { type: 'tool_result', content: 'Error: authentication failed; password=hunter2' },
+          { type: 'tool_result', content: 'Error: 401 Authorization: Bearer abcdefghijklmnop' },
           { type: 'tool_result', content: 'error: token ghp_abcdefghijklmnopqrstuvwxyz0123456789 rejected' },
         ],
       },
@@ -402,6 +404,9 @@ test('the judge transcript keeps failing tool output, drops secrets, keeps head 
   assert.match(t, /middle of session omitted/);
   assert.match(t, /TOOL RESULT: Error: Timed out waiting for ROUND_START/);
   assert.doesNotMatch(t, /all 50 tests passed/);
+  // Credential values are redacted, not sent to the judge verbatim.
+  assert.doesNotMatch(t, /hunter2|abcdefghijklmnop/);
+  assert.match(t, /authentication failed; password=\[redacted\]/);
   assert.doesNotMatch(t, /ghp_/);
   assert.ok(t.length <= 14100, `transcript is ${t.length} chars`);
 });

@@ -26,6 +26,20 @@ const MEMORY_CHARS = 6000;
 // a timeout, a stack trace. Keep only results that look like failures.
 const FAILURE = /\b(?:error|errors|failed|failing|failure|fatal|exception|timed out|timeout|ETIMEDOUT|denied|refused|not found|panic|traceback|assertion)\b/i;
 
+// Credential values in failing output (password=hunter2, a Bearer token)
+// are not shaped like the keys looksSecret knows, so redact them before
+// the snippet can reach the judge; anything still secret-shaped after
+// redaction is dropped by the caller.
+export function redactCredentials(text) {
+  return text
+    .replace(/\bBearer\s+[A-Za-z0-9._~+/=-]+/gi, 'Bearer [redacted]')
+    .replace(/(authorization\s*:\s*)(?:\S+\s+)?\S+/gi, '$1[redacted]')
+    .replace(
+      /\b(password|passwd|pwd|api[-_]?key|secret|access[-_]?token|auth[-_]?token|token)\s*[:=]\s*\S+/gi,
+      '$1=[redacted]'
+    );
+}
+
 function toolResultText(b) {
   const c = b?.content;
   if (typeof c === 'string') return c;
@@ -58,8 +72,10 @@ export function transcriptText(file) {
     for (const b of c) {
       if (b?.type !== 'tool_result') continue;
       const t = toolResultText(b).trim();
-      if (!t || !(b.is_error || FAILURE.test(t)) || looksSecret(t)) continue;
-      const clipped = t.length > TOOL_SNIPPET_CHARS ? `${t.slice(0, TOOL_SNIPPET_CHARS)}…` : t;
+      if (!t || !(b.is_error || FAILURE.test(t))) continue;
+      const safe = redactCredentials(t);
+      if (looksSecret(safe)) continue;
+      const clipped = safe.length > TOOL_SNIPPET_CHARS ? `${safe.slice(0, TOOL_SNIPPET_CHARS)}…` : safe;
       parts.push(`TOOL RESULT${b.is_error ? ' (error)' : ''}: ${clipped}`);
     }
   }

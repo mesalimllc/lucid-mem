@@ -223,7 +223,10 @@ export function commit(repo, files, msg) {
       Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 200);
       r = git(repo, ['add', '--', f]);
     }
-    if (r.code !== 0) unstaged.push(f);
+    if (r.code !== 0) {
+      const why = (r.stderr || r.error?.message || '').trim().split('\n')[0];
+      unstaged.push(why ? `${f} (${why})` : f);
+    }
   }
   const r = git(repo, ['commit', '-m', msg]);
   if (unstaged.length)

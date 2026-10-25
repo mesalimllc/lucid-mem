@@ -124,6 +124,43 @@ test('dream --triage plans first, then --apply keeps, rewrites and archives', ()
   assert.equal(fs.existsSync(path.join(home, 'dreams', 'triage-plan.json')), false);
 });
 
+test('dream --triage --apply skips invalid hand-edited plan items', () => {
+  const home = seeded();
+  const mem = path.join(home, 'MEMORY.md');
+  fs.writeFileSync(
+    mem,
+    '# Memory\n\n- keep me untyped [added: 2026-10-24; id: c001]\n- typo action target [added: 2026-10-24; id: c002]\n- bad kind target [added: 2026-10-24; id: c003]\n\n## Index\n'
+  );
+  fs.mkdirSync(path.join(home, 'dreams'), { recursive: true });
+  const plan = path.join(home, 'dreams', 'triage-plan.json');
+  fs.writeFileSync(
+    plan,
+    JSON.stringify({
+      items: [
+        { id: 'c002', rel: 'MEMORY.md', original: 'typo action target', action: 'delete', kind: 'fact', text: 'x' },
+        { id: 'c003', rel: 'MEMORY.md', original: 'bad kind target', action: 'keep', kind: 'bogus' },
+        { id: 'c001', rel: '../../etc/passwd', original: 'keep me untyped', action: 'archive' },
+        { id: 'c001', rel: 'MEMORY.md', original: 'keep me untyped', action: 'keep', kind: 'fact' },
+      ],
+    })
+  );
+  const a = run(['dream', '--triage', '--apply'], { amrHome: home });
+  assert.equal(a.status, 0, a.stderr);
+  assert.match(a.stderr, /skipping invalid plan item/);
+  assert.match(a.stdout, /kept 1, rewrote 0, archived 0/);
+  const after = read(mem);
+  assert.match(after, /typo action target/);
+  assert.match(after, /bad kind target/);
+  assert.doesNotMatch(after, /undefined/);
+  assert.match(after, /keep me untyped \[added: 2026-10-24; id: c001; kind: fact\]/);
+
+  // A malformed plan is a clean error, not a stack trace.
+  fs.writeFileSync(plan, '{not json');
+  const bad = run(['dream', '--triage', '--apply'], { amrHome: home });
+  assert.notEqual(bad.status, 0);
+  assert.match(bad.stderr, /triage plan is unreadable/);
+});
+
 test('dream --triage --apply skips entries edited after planning', () => {
   const home = seeded();
   const mem = path.join(home, 'MEMORY.md');

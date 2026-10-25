@@ -174,12 +174,41 @@ function apply(home) {
     process.exitCode = 1;
     return;
   }
-  const { items = [] } = JSON.parse(fs.readFileSync(abs, 'utf8'));
+  // The plan is hand-editable, so by apply time it is untrusted input:
+  // re-validate everything parseVerdicts enforced when it was written.
+  let items;
+  try {
+    ({ items } = JSON.parse(fs.readFileSync(abs, 'utf8')));
+    if (!Array.isArray(items)) throw new Error('items is not an array');
+  } catch (e) {
+    err(`triage plan is unreadable (${e.message}); fix or delete ${TRIAGE_PLAN}`);
+    process.exitCode = 1;
+    return;
+  }
+  const live = new Set(liveFiles(home));
+  const valid = (it) =>
+    it &&
+    live.has(it.rel) &&
+    typeof it.id === 'string' &&
+    typeof it.original === 'string' &&
+    ['keep', 'rewrite', 'archive'].includes(it.action) &&
+    (it.action === 'archive' || DURABLE_KINDS.includes(it.kind)) &&
+    (it.action !== 'rewrite' ||
+      (typeof it.text === 'string' &&
+        it.text.trim() &&
+        !/[\r\n]/.test(it.text) &&
+        !episodicHits(it.text).length &&
+        !looksSecret(it.text)));
   const counts = { keep: 0, rewrite: 0, archive: 0, stale: 0 };
   const touched = new Set();
   withLock(home, () => {
     const byRel = new Map();
     for (const it of items) {
+      if (!valid(it)) {
+        err(`triage: skipping invalid plan item ${JSON.stringify(it?.id ?? null)}`);
+        counts.stale++;
+        continue;
+      }
       if (!byRel.has(it.rel)) byRel.set(it.rel, []);
       byRel.get(it.rel).push(it);
     }
@@ -218,11 +247,9 @@ function apply(home) {
         }
         counts[it.action]++;
       }
-      // Temp file then rename: a crash mid-write must not truncate memory.
-      const tmp = `${file}.${process.pid}.tmp`;
-      fs.writeFileSync(tmp, lines.filter((l) => l !== null).join('\n'));
-      fs.renameSync(tmp, file);
-      touched.add(rel);
+      // Archive first: a crash after this append leaves a duplicate,
+      // which is recoverable; replacing the live file first could lose
+      // the archived lines entirely.
       if (archived.length) {
         const arel = `archive/${rel}`;
         const aabs = path.join(home, arel);
@@ -233,6 +260,11 @@ function apply(home) {
         fs.appendFileSync(aabs, archived.join('\n') + '\n');
         touched.add(arel);
       }
+      // Temp file then rename: a crash mid-write must not truncate memory.
+      const tmp = `${file}.${process.pid}.tmp`;
+      fs.writeFileSync(tmp, lines.filter((l) => l !== null).join('\n'));
+      fs.renameSync(tmp, file);
+      touched.add(rel);
     }
     fs.rmSync(abs, { force: true });
     if (
