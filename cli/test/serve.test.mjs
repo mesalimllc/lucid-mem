@@ -53,7 +53,7 @@ test('serve memory_add takes kind/ttl and memory_update addresses entries by id'
   const id = text.match(/\[id ([0-9a-f]{4})\]/)?.[1];
   assert.ok(id, text);
   const upd = rpc(home, [call(3, 'memory_update', { id, text: 'PR 9 merged' })]);
-  assert.match(upd.find((m) => m.id === 3).result.content[0].text, new RegExp(`updated .*\[id ${id}\]`));
+  assert.match(upd.find((m) => m.id === 3).result.content[0].text, new RegExp(`updated .*\\[id ${id}\\]`));
   const none = rpc(home, [call(4, 'memory_update', { text: 'x y' })]);
   assert.equal(none.find((m) => m.id === 4).result.isError, true);
 });
