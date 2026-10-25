@@ -13,7 +13,7 @@ amr install               # wire rules + hooks + MCP into detected agent hosts
 amr doctor                # verify everything
 ```
 
-Then start a session in a wired host — Cursor, Claude Code, Windsurf, Devin, Copilot, Codex, Cline, Muse, Claude Desktop, Antigravity, OpenCode, CommandCode, or Freebuff — and memory is already in context.
+Then start a session in a wired host — Cursor, Claude Code, Windsurf, Devin, Copilot, Codex, Cline, Muse, Claude Desktop, Antigravity, Gemini CLI, Zed, OpenCode, CommandCode, or Freebuff — and memory is already in context.
 
 ## Daily use
 
