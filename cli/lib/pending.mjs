@@ -55,20 +55,30 @@ function readItems(abs) {
     .split(/\r?\n/)
     .map((l) => l.match(ITEM))
     .filter(Boolean)
-    .map(([line, date, , text]) => ({ line, date, text }));
+    .map(([line, date, head, text]) => ({ line, date, head, text }));
 }
+
+// Project scope rides on the head as scope=<slug>. Unscoped items are
+// global and show everywhere; scoped items show only in that project.
+const visibleIn = (head, scope) => {
+  const s = (head.match(/scope=([a-z0-9-]+)/) || [])[1];
+  return !s || s === scope;
+};
 
 function writeItems(abs, items) {
   if (!items.length) return fs.rmSync(abs, { force: true });
   fs.mkdirSync(path.dirname(abs), { recursive: true });
-  fs.writeFileSync(abs, [...HEADER, ...items.map((i) => i.line)].join('\n') + '\n');
+  // Temp file then rename, so `amr context` never reads a torn queue.
+  const tmp = `${abs}.${process.pid}.tmp`;
+  fs.writeFileSync(tmp, [...HEADER, ...items.map((i) => i.line)].join('\n') + '\n');
+  fs.renameSync(tmp, abs);
 }
 
 const fresh = (date, now) => (Date.parse(now) - Date.parse(date)) / 864e5 <= MAX_AGE_DAYS;
 
 // proposals: [{op:'add'|'update', id?, kind?, project?, text}]
 // Returns how many were queued (new, not near-duplicates of queued ones).
-export function queueReflections(home, proposals, now = today()) {
+export function queueReflections(home, proposals, now = today(), scope = null) {
   const abs = path.join(home, PENDING_REFLECTIONS);
   return withLock(home, () => {
     const items = readItems(abs).filter((i) => fresh(i.date, now));
@@ -76,10 +86,12 @@ export function queueReflections(home, proposals, now = today()) {
     for (const p of proposals) {
       const text = String(p.text).replace(/\s+/g, ' ').trim();
       if (!text || isNearDuplicate(text, items.map((i) => i.text))) continue;
-      const head =
+      const base =
         p.op === 'update'
           ? `update ${p.id}`
           : ['add', p.kind, p.project ? 'project' : 'global'].filter(Boolean).join(' ');
+      // Updates name ids from this project's memory, so they are scoped too.
+      const head = scope && (p.op === 'update' || p.project) ? `${base} scope=${scope}` : base;
       items.push({ line: `- [reflect] ${now} ${head}: ${text}`, date: now, text });
       queued++;
     }
@@ -101,9 +113,9 @@ export function drainReflections(home, savedText) {
 }
 
 // Bullet lines for `amr context`, newest first, expired ones skipped.
-export function pendingReflectionLines(home, now = today()) {
+export function pendingReflectionLines(home, now = today(), scope = null) {
   return readItems(path.join(home, PENDING_REFLECTIONS))
-    .filter((i) => fresh(i.date, now))
+    .filter((i) => fresh(i.date, now) && visibleIn(i.head, scope))
     .reverse()
     .map((i) => i.line);
 }

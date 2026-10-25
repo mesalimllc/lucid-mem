@@ -11,6 +11,7 @@ import {
   git,
   hasRemote,
   today,
+  trailingMeta,
   withLock,
 } from './core.mjs';
 
@@ -20,7 +21,7 @@ const err = (s) => process.stderr.write(s + '\n');
 export const ID_RE = /^[0-9a-f]{4,8}$/;
 const META_ID = /\bid:\s*([0-9a-f]{4,8})\b/;
 
-export const entryId = (line) => (String(line).match(META_ID) || [])[1] || null;
+export const entryId = (line) => (trailingMeta(line).match(META_ID) || [])[1] || null;
 
 function memFiles(home) {
   const files = [];

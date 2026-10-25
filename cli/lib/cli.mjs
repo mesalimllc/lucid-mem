@@ -59,7 +59,7 @@ flags:
   --project[=name]              scope the entry to the current repo, or a named project
   --also a,b                    attach extra projects to the context digest
   --file <topic>                write to a topic file instead of MEMORY.md
-  --kind <k>                    add kind metadata (preference|fact|decision|howto)
+  --kind <k>                    add kind metadata (pitfall|decision|preference|fact|howto|state)
   --cwd <dir>                   resolve project/host context against this dir
   --allow-secret                bypass secret-shape refusal
 `;

@@ -28,7 +28,9 @@ const usagePath = (home) => path.join(home, '.git', 'amr-usage.json');
 
 export function loadUsage(home) {
   try {
-    return JSON.parse(fs.readFileSync(usagePath(home), 'utf8'));
+    const u = JSON.parse(fs.readFileSync(usagePath(home), 'utf8'));
+    // Anything but a plain object would crash scoreEntry or lose writes.
+    return u && typeof u === 'object' && !Array.isArray(u) ? u : {};
   } catch {
     return {};
   }
@@ -41,8 +43,13 @@ export function bumpUsage(home, ids, now = Date.now()) {
     const e = u[id] || { n: 0 };
     u[id] = { n: e.n + 1, last: now };
   }
+  // Temp file then rename: an interrupted write cannot leave a torn file
+  // that loadUsage would then discard along with all usage.
+  const abs = usagePath(home);
+  const tmp = `${abs}.${process.pid}.tmp`;
   try {
-    fs.writeFileSync(usagePath(home), JSON.stringify(u));
+    fs.writeFileSync(tmp, JSON.stringify(u));
+    fs.renameSync(tmp, abs);
   } catch {}
 }
 

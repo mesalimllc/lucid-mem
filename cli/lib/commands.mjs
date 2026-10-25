@@ -1,3 +1,4 @@
+import crypto from 'node:crypto';
 import fs from 'node:fs';
 import { spawn } from 'node:child_process';
 import os from 'node:os';
@@ -32,7 +33,7 @@ import {
   withLock,
 } from './core.mjs';
 import { DEFAULT_BUDGET, bumpUsage, loadUsage, pickWithinBudget } from './rank.mjs';
-import { ID_RE, findById, newId, scanIds } from './ids.mjs';
+import { ID_RE, entryId, findById, newId, scanIds } from './ids.mjs';
 import { drainReflections, pendingReflectionLines } from './pending.mjs';
 
 const out = (s = '') => process.stdout.write(s + '\n');
@@ -87,14 +88,19 @@ export function cmdReflect() {
   // Default: reflect in a detached background process; the session sees
   // nothing. AMR_REFLECT=block restores the in-session prompt.
   if (process.env.AMR_REFLECT !== 'block') {
-    const f = path.join(os.tmpdir(), `amr-reflect-${process.pid}.json`);
-    fs.writeFileSync(f, JSON.stringify(p));
-    const cli = path.join(path.dirname(fileURLToPath(import.meta.url)), '..', 'amr.mjs');
-    spawn(process.execPath, [cli, 'reflect-run', f], {
-      detached: true,
-      stdio: 'ignore',
-      windowsHide: true,
-    }).unref();
+    // Random name plus exclusive create: a symlink planted at a guessable
+    // path in the shared tmpdir cannot redirect the write. A failed write
+    // leaves the hook silent.
+    try {
+      const f = path.join(os.tmpdir(), `amr-reflect-${crypto.randomBytes(8).toString('hex')}.json`);
+      fs.writeFileSync(f, JSON.stringify(p), { flag: 'wx', mode: 0o600 });
+      const cli = path.join(path.dirname(fileURLToPath(import.meta.url)), '..', 'amr.mjs');
+      spawn(process.execPath, [cli, 'reflect-run', f], {
+        detached: true,
+        stdio: 'ignore',
+        windowsHide: true,
+      }).unref();
+    } catch {}
     return;
   }
   out(
@@ -279,7 +285,7 @@ export function cmdContext(flags) {
   // are unsaved and wait for a session to accept or ignore them.
   const pending = path.join(home, 'dreams', 'pending-saves.md');
   const items = [
-    ...pendingReflectionLines(home),
+    ...pendingReflectionLines(home, undefined, proj?.slug ?? null),
     ...(fs.existsSync(pending) ? bullets(fs.readFileSync(pending, 'utf8')) : []),
   ].slice(0, 8);
   if (items.length)
@@ -498,7 +504,7 @@ export function cmdUpdate(match, text, flags) {
   });
   drainReflections(home, text);
   if (hasRemote(home)) git(home, ['push'], { timeout: 10000 });
-  const eid = (lines[i].match(/\bid:\s*([0-9a-f]{4,8})\b/) || [])[1];
+  const eid = entryId(lines[i]);
   out(`updated ${t.rel}${eid ? ` [id ${eid}]` : ''}`);
 }
 

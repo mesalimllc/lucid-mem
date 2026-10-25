@@ -11,7 +11,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { cmdAdd, episodicHits } from './commands.mjs';
-import { KINDS, isExpired, projectFor, resolveHome } from './core.mjs';
+import { KINDS, isExpired, looksSecret, projectFor, resolveHome } from './core.mjs';
 import { entryId } from './ids.mjs';
 import { resolveJudge, runJudge } from './judge.mjs';
 import { isNearDuplicate, queueReflections } from './pending.mjs';
@@ -118,7 +118,7 @@ export function vetProposals(entries, memory) {
   const kept = [];
   for (const e of entries) {
     const text = e.text.trim();
-    if (episodicHits(text).length) continue;
+    if (episodicHits(text).length || looksSecret(text)) continue;
     if (e.op === 'update') {
       if (ids.has(String(e.id))) kept.push({ op: 'update', id: String(e.id), text });
       continue;
@@ -157,11 +157,11 @@ export function cmdReflectRun(payloadFile) {
   const memory = existingMemory(home, cwd);
   const reply = runJudge(judge, PROMPT(convo, memory));
   if (reply === null) log(`judge ${judge}: no reply (timeout or error)`);
-  else if (!process.env.AMR_REFLECT_QUIET) log(`reply: ${reply.slice(0, 400).replace(/\s+/g, ' ')}`);
+  else if (!process.env.AMR_REFLECT_QUIET) log(`reply: ${reply.length} chars`);
   const proposals = vetProposals(parseEntries(reply), memory);
 
-  if (!process.env.AMR_REFLECT_AUTOSAVE) {
-    const queued = queueReflections(home, proposals);
+  if (process.env.AMR_REFLECT_AUTOSAVE !== '1') {
+    const queued = queueReflections(home, proposals, undefined, projectFor(cwd)?.slug ?? null);
     return log(`judge ${judge}: ${queued}/${proposals.length} queued for review`);
   }
   // Opt-in direct saving: adds only. Updates rewrite reviewed memory, so
@@ -183,6 +183,11 @@ export function cmdReflectRun(payloadFile) {
       process.stdout.write = real;
     }
   }
-  const queued = queueReflections(home, proposals.filter((x) => x.op === 'update'));
+  const queued = queueReflections(
+    home,
+    proposals.filter((x) => x.op === 'update'),
+    undefined,
+    projectFor(cwd)?.slug ?? null
+  );
   log(`judge ${judge}: ${saved} saved, ${queued} updates queued`);
 }

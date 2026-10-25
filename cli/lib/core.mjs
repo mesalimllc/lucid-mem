@@ -301,11 +301,16 @@ export const STATE_TTL_DAYS = 2;
 export const addDays = (days, from = new Date()) =>
   new Date(from.getTime() + days * 864e5).toISOString().slice(0, 10);
 
+// The trailing [meta] group is the only place kind, expires and id are read
+// from: prose in an entry's text can say "expires:" without meaning it.
+export const trailingMeta = (line) =>
+  (String(line).match(/\[([^[\]]*)\]\s*$/) || [])[1] || '';
+
 export const entryKind = (line) =>
-  (String(line).match(/kind:\s*([a-z-]+)/) || [])[1] || null;
+  (trailingMeta(line).match(/kind:\s*([a-z-]+)/) || [])[1] || null;
 
 // An entry is expired when its expires: date is before `now` (YYYY-MM-DD).
 export const isExpired = (line, now = today()) => {
-  const d = (String(line).match(/expires:\s*(\d{4}-\d{2}-\d{2})/) || [])[1];
+  const d = (trailingMeta(line).match(/expires:\s*(\d{4}-\d{2}-\d{2})/) || [])[1];
   return !!d && d < now;
 };

@@ -153,7 +153,7 @@ test('entries get ids; update and supersede address them by id', () => {
   assert.ok(id, a.stdout);
   const u = run(['update', id, 'uses two-space indentation'], { amrHome });
   assert.equal(u.status, 0, u.stderr);
-  assert.match(u.stdout, new RegExp(`\[id ${id}\]`));
+  assert.match(u.stdout, new RegExp(`\\[id ${id}\\]`));
   const mem = path.join(amrHome, 'MEMORY.md');
   assert.match(read(mem), new RegExp(`two-space indentation.*id: ${id}`));
   assert.doesNotMatch(read(mem), /tabs for indentation/);

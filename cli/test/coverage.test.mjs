@@ -282,8 +282,8 @@ test('reflect-run queues judge proposals for review instead of saving them', () 
   // Nothing new was written to memory.
   assert.equal(read(path.join(amrHome, 'projects', fs.readdirSync(path.join(amrHome, 'projects'))[0])), body0);
   const queue = read(pendingFile(amrHome));
-  assert.match(queue, /add pitfall project: When CI flakes, re-run once/);
-  assert.match(queue, new RegExp('update ' + id + ': When the drift gate flakes, run go test'));
+  assert.match(queue, /add pitfall project scope=[a-z0-9-]+: When CI flakes, re-run once/);
+  assert.match(queue, new RegExp('update ' + id + ' scope=[a-z0-9-]+: When the drift gate flakes, run go test'));
   assert.doesNotMatch(queue, /PR #788/);
   assert.doesNotMatch(queue, /warm the Go cache because/);
   assert.doesNotMatch(queue, /ffff/);
