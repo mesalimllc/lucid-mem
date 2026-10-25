@@ -46,7 +46,7 @@ This release fixes the failure mode every memory system eventually hits: accumul
 
 Triage rewrites archive their original wording. Superseded entries move to `archive/superseded.md`. The system is designed to be reversible.
 
-## Evidence, not adjectives
+## About
 
 - **15 hosts, one install.** Cursor, Claude Code, Windsurf, Devin, Copilot, Codex, Cline, Muse, Claude Desktop, Antigravity, Gemini CLI, Zed, OpenCode, CommandCode, and Freebuff. Hooks where hosts expose them; rules and MCP where they do not.
 - **The save loop is measured.** `amr coverage` reports a save rate against real transcripts, logs a trend, queues misses, and can sample unflagged messages through a judge to estimate its own false-negative rate.
