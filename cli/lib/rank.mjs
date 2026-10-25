@@ -93,8 +93,11 @@ export function clipEntry(line, cap = FLOOR_ENTRY_CAP) {
 // renders empty but also never exceeds the budget by more than the
 // floor cap allows.
 export function pickWithinBudget(arr, maxCount, budget, usage, isNoise) {
+  // One clock reading for the whole pass: per-entry Date.now() calls put
+  // equal-score entries a millisecond apart, so ties broke by timing.
+  const now = Date.now();
   const ranked = arr
-    .map((line, i) => ({ line, i, s: scoreEntry(line, usage, isNoise) }))
+    .map((line, i) => ({ line, i, s: scoreEntry(line, usage, isNoise, now) }))
     .sort((a, b) => b.s - a.s || b.i - a.i);
   const chosen = [];
   let chars = 0;
