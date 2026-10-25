@@ -2,7 +2,7 @@
 
 **The memory layer for agents that do real work.**
 
-[Mesalim LLC](https://github.com/mesalimllc) · MIT · local-first · 15 agent hosts · no hosted service required
+[Mesalim LLC](https://github.com/mesalimllc)
 
 AI coding agents are extraordinary inside one session and forget everything after it. lucid-mem gives them durable, git-backed memory that follows the work across sessions, repositories, and tools — automatically. It implements the [Agent Memory Repo spec](https://cognition.com/agent-memory-repo) and adds the harness that makes the loop trustworthy: deterministic retrieval, judged saves, reviewable maintenance, and a measured save rate.
 
