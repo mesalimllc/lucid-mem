@@ -1,77 +1,124 @@
 # lucid-mem
 
-Agents work better when they remember things across sessions. lucid-mem implements the [Agent Memory Repo spec](https://cognition.com/agent-memory-repo) as an autonomous layer: your agent saves what it learns from you in real time, and that memory is live across sessions. Memories link to each other, so your agent navigates them like a wiki.
+**The memory layer for agents that do real work.**
 
-The `amr` CLI wires itself into 13 agent hosts so memory is retrieved at session start, saved while the agent works, synced through git, and maintained by scheduled dreaming, with no manual invocation. See `lucid-mem-plan.md` for the design.
+[Mesalim LLC](https://github.com/mesalimllc) · MIT · local-first · 15 agent hosts · no hosted service required
+
+AI coding agents are extraordinary inside one session and forget everything after it. lucid-mem gives them durable, git-backed memory that follows the work across sessions, repositories, and tools — automatically. It implements the [Agent Memory Repo spec](https://cognition.com/agent-memory-repo) and adds the harness that makes the loop trustworthy: deterministic retrieval, judged saves, reviewable maintenance, and a measured save rate.
+
+We think memory is infrastructure, not a chat feature. That is the bet behind Mesalim LLC.
+
+## The gap
+
+Every team deploying agents hits the same wall: the agent rediscovers the architecture, re-learns a preference, and repeats a mistake it already fixed, because the context window ends and the knowledge goes with it. Longer context helps for an hour; it does not compound.
+
+The market has plenty of transcript dumps, vector stores, and per-tool notes. They fail in predictable ways. Retrieval is fuzzy. Saving is unmeasured. Memory turns into an event log. Every host stores it differently. The hard problem is not storage — it is deciding what deserves to be remembered, keeping it clean as it grows, and proving the loop works.
+
+## Why now
+
+- Agents are moving from autocomplete to autonomous, multi-hour work, where context is the binding constraint.
+- Context windows are getting larger and cheaper, but they still reset. Memory is how knowledge compounds.
+- The host landscape has fragmented across a dozen tools. Memory that works everywhere is more valuable than another per-tool notes feature.
+
+## What lucid-mem does
+
+lucid-mem runs underneath the agent's normal workflow in four moves:
+
+- **Retrieve deterministically.** Session-start hooks inject a ranked digest. No model judgment in the read path.
+- **Save with judgment.** Host rules teach the agent what is durable; saving is one command, with secret checks and near-duplicate protection.
+- **Maintain continuously.** Session-end work and scheduled dreams dedupe, compact, expire transient state, and queue ambiguous learnings for review.
+- **Measure the result.** `amr coverage` replays transcripts, finds durable signals the agent missed, and reports a save rate. The loop is observable, not aspirational.
+
+## The memory-quality release
+
+This release fixes the failure mode every memory system eventually hits: accumulating more than it understands.
+
+| Area | What shipped | Why it matters |
+|---|---|---|
+| **Quieter reflection** | `amr reflect` fires only after real work — six or more write/commit/push actions, or twenty tool calls — and runs as a detached background judge. Nothing prints in the session. | Memory improves without interrupting the person doing the work. |
+| **Reviewable learning** | Judge proposals land in `dreams/pending-reflections.md` and surface at the next session. Adds can auto-save; updates always wait for review. | The agent can learn without silently rewriting what you know. |
+| **Kinds and expiry** | Entries carry `pitfall`, `decision`, `preference`, `fact`, `howto`, or `state`. State entries expire after two days and drop out of context and cleanup. | Memory becomes a durable knowledge base, not a status feed. |
+| **Stable identity** | Every entry gets a short id such as `a3f9`: `amr update <id>`, `amr supersede <id>`, `amr used <id>`, `amr ids`. | Memory can be corrected, retired, and credited instead of appended forever. |
+| **Ranked context** | `amr context` ranks by kind, recency (60-day half-life), and explicit use inside a shared 6,000-character budget (`--budget`, `contextBudget`). `--full` opts out. | The digest stays small and relevant as the corpus grows. |
+| **Backlog triage** | `amr dream --triage` asks the judge to keep, rewrite, or archive legacy state-like entries. It writes a plan to `dreams/triage-plan.json`; `--apply` executes it. | Legacy untyped memory can become useful again — with a review step. |
+| **Better judge input** | The judge sees existing memory, failing tool output, and both the head and tail of long transcripts. Secret-shaped content is filtered. | The model judges with the evidence that actually explains a lesson. |
+| **Wider coverage** | Gemini CLI and Zed join the host matrix. Gemini CLI shares `GEMINI.md` with Antigravity; Zed's JSONC settings are preserved. | One memory follows the engineer across more of their tools. |
+
+Triage rewrites archive their original wording. Superseded entries move to `archive/superseded.md`. The system is designed to be reversible.
+
+## Evidence, not adjectives
+
+- **15 hosts, one install.** Cursor, Claude Code, Windsurf, Devin, Copilot, Codex, Cline, Muse, Claude Desktop, Antigravity, Gemini CLI, Zed, OpenCode, CommandCode, and Freebuff. Hooks where hosts expose them; rules and MCP where they do not.
+- **The save loop is measured.** `amr coverage` reports a save rate against real transcripts, logs a trend, queues misses, and can sample unflagged messages through a judge to estimate its own false-negative rate.
+- **Real judge, real transcripts.** Reflection and triage run against installed `claude` or `codex` CLIs, not a mock. In one dry run on a real memory repo, triage classified 91 of 92 legacy entries — 7 keep, 69 rewrite, 15 archive — with originals archived.
+- **Boring where it matters.** A zero-runtime-dependency Node CLI, git as the storage engine, atomic writes, a write lock, bounded hook timeouts, and `exit 0` on soft failure. A memory hook should never break a session.
+- **Open and inspectable.** MIT-licensed, spec-driven, no hosted service in the path. Your memory is a repo you own.
 
 ## Quick start
 
-Requires Node.js and git.
+Requires Node.js 18+ and git.
 
 ```sh
-npm i -g lucid-mem          # or: clone this repo and `npm link` inside cli/
-amr ensure                  # create the memory repo (default ~/agent-memory, override with $AMR_HOME)
-amr install                 # wire every detected host (rules + hooks + MCP)
-amr doctor                  # verify everything
+npm i -g lucid-mem
+amr ensure                  # create the memory repo (~/agent-memory; override with $AMR_HOME)
+amr install                 # wire detected hosts: rules, hooks, MCP
+amr doctor                  # verify the install
 ```
 
-Then start a session in any wired host. Memory appears in context automatically. To try it manually:
+Start a session in any wired host; the digest is already in context. To try it directly:
 
 ```sh
-amr context                 # print what a session in this directory would see
-amr add "I prefer concise bullet-point summaries"
+amr context
+amr add "prefer pnpm over npm in this repo" --kind preference --project
 ```
 
-Point the memory repo at a **private** remote you own to make it durable and multi-machine:
+Point the memory repo at a **private** remote to make it durable and multi-machine:
 
 ```sh
 amr remote set git@github.com:you/your-memory.git
 amr sync
 ```
 
-## What autonomy means here
+## How the loop works
 
-The two directions of memory use different mechanisms:
-
-- **Retrieve is deterministic.** Session-start hooks (Cursor, Claude Code, Windsurf) run `amr context` and inject the digest. Other hosts get the same result through always-on rules + MCP. No model judgment involved.
-- **Save is judgment-based.** A hook can't decide what is durable, so every host carries a rules block that teaches the agent to call `amr add` when it learns something lasting. The retrieved context itself ends with a one-line affordance reminding the agent how.
-- **Maintenance is scheduled.** Session-end hooks and OS-scheduled tasks run `amr dream` to dedupe, archive overflow, and keep `MEMORY.md` small, mostly invisibly, with a moon flipbook when it runs inside a live session.
-
-A `sessionEnd` hook commits and pushes anything `amr` left dirty, so nothing is lost if the agent forgets to save mid-task.
+| Direction | Mechanism | Guarantee |
+|---|---|---|
+| **Retrieve** | Session-start hooks run `amr context`; other hosts get the same digest through rules and MCP. | Deterministic, bounded, no model in the read path. |
+| **Save** | An always-on rule block plus the digest's save affordance. `amr add` refuses secrets and warns on ephemeral detail. | One command, with guardrails. |
+| **Reflect** | A gated Stop hook asks a background judge what durable lesson was missed, then queues it for review. | Learns from the session without interrupting it. |
+| **Maintain** | `amr dream` dedupes, compacts, expires state, and triages backlogs; session-end hooks keep the repo clean. | Memory stays small and reviewable. |
+| **Sync** | Every write commits; `amr sync` does pull-rebase and push; session-end hooks flush leftovers. | Durable across machines and teammates. |
+| **Measure** | `amr coverage` compares transcript signals with the corpus and reports a save rate. | The system can prove it is working. |
 
 ## Commands
 
 | Command | What it does |
 |---|---|
 | `amr ensure` | Idempotent init: `git init`, `MEMORY.md`, first commit. Never touches global git config. |
-| `amr context [dir]` | Session-start digest: global bullets + this repo's project memory + linked projects. `--full` for the uncapped version, `--also a,b` to attach extra projects. |
-| `amr add "text"` | Save a memory. `--project` routes to this repo's file, `--file topic` to a topic file, `--kind` adds metadata. Refuses secret-shaped input (`--allow-secret` overrides). |
-| `amr update "match" "text"` | Replace an entry in place, preserving its metadata. Errors on 0 or >1 matches. |
-| `amr search "term"` | Grep all memory files, including the archive. |
-| `amr index` | Rebuild the `## Index` section of `MEMORY.md` from files on disk. |
-| `amr link <name...> [--for <p>]` | Auto-attach other repos' memory to a repo's sessions (transitive). |
-| `amr unlink <name...> [--for <p>]` | Remove links. |
-| `amr peer [add <url>\|remove <n>]` | Attach a teammate's memory repo (multiplayer). Clones into `<AMR_HOME>-peers/`; `amr context` composes its global digest plus its copy of the current project's memory, read-only. |
-| `amr policy [name key bool]` | Per-repo policy: `noglobal` (keep out of the pooled outside digest), `private` (details below). No args = list all. |
-| `amr remote [set <url>]` | Show or set the memory repo's git remote. Private repos only. |
-| `amr sync` | `pull --rebase --autostash` + `push`. No-op without a remote. |
-| `amr doctor` | Repo health, PATH, per-host wiring, dead `amr.json` keys. |
-| `amr dream` | Memory health report. `--fix` dedupes and cleans, `--compact` archives overflow past `--keep N` (default 25), `--if-stale N` no-ops if a dream ran recently. `--inline` prints a transcript-safe moon flipbook; `--spin` demos it. |
-| `amr harvest` | List recent agent transcripts across hosts. `--extract` streams normalized user messages (`--days N --max N --min C --json`). |
-| `amr discover` | Rank repos by transcript mentions, show memory coverage (seeded/MISSING), suggest links from co-mention evidence. |
-| `amr coverage` | **The save-rate metric.** Replays recent transcripts, detects durable signals (preferences, decisions, root causes), diffs them against the repo, reports `% covered` plus the missed list. Appends a trend line to `dreams/coverage.jsonl` (`--no-log` to skip, `--json` for machines). Misses queue into `dreams/pending-saves.md`, which `amr context` surfaces next session for review. `--judge claude\|codex\|env` adds an LLM pass that prunes recall cues, catches paraphrase saves, samples 30 unflagged messages to measure heuristic recall (adjusted rate), and distills each miss into a proposed entry. |
-| `amr install [--host a,b\|all]` | Wire rules, hooks, and MCP into detected hosts. Idempotent; backs up every file it touches. |
-| `amr uninstall [--host a,b\|all]` | Reverse of install: strips amr hooks, rules blocks, and MCP entries while preserving your other config. |
+| `amr context [dir]` | Ranked session digest. Project-scoped inside a known repo; global plus a pooled digest outside. `--budget N`, `--also a,b`, `--full`. |
+| `amr add "text"` | Save a memory. `--project[=name]`, `--file topic`, `--kind`. Refuses secret-shaped input and warns on session-state detail. |
+| `amr update <id> "text"` | Replace an entry by id or unique text match, preserving metadata. |
+| `amr supersede <id> ["text"]` | Retire an entry to `archive/superseded.md`, optionally with a replacement. |
+| `amr used <id...>`, `amr ids` | Credit entries that helped; backfill ids for legacy entries. |
+| `amr search "term"`, `amr index` | Search every memory file; rebuild the `MEMORY.md` index. |
+| `amr link`, `amr unlink`, `amr peer`, `amr policy` | Attach sibling repos, teammates' memory repos, and per-repo privacy policy. |
+| `amr remote`, `amr sync` | Show or set the private git remote; pull-rebase and push. |
+| `amr dream` | Health report. `--fix` dedupes, `--compact` archives overflow, `--triage [--apply]` sorts a legacy backlog into keep/rewrite/archive. |
+| `amr coverage` | The save-rate metric. Replays transcripts, diffs durable signals against memory, logs a trend, and queues misses. `--judge` accepts `claude`, `codex`, or `env`. |
+| `amr reflect` | The gated Stop hook. `AMR_REFLECT=block` restores the in-session prompt; `AMR_REFLECT_AUTOSAVE=1` lets new adds save directly. |
+| `amr harvest`, `amr discover` | List transcripts, extract normalized user messages, and find hot repos with missing memory. |
+| `amr install`, `amr uninstall` | Merge rules, hooks, and MCP into detected hosts, with backups. Idempotent and reversible. |
 | `amr serve` | stdio MCP server: `memory_context`, `memory_add`, `memory_search`, `memory_update`. |
+| `amr doctor` | Repo health, PATH, dead config keys, and per-host wiring. |
 
 ## Host wiring
 
-`amr install` merges, never clobbers, into each detected host, backing up to `*.amr-backup` first. Report shows `wired (rules+mcp)`, `(rules only)`, or `(mcp only)`.
+`amr install` merges, never clobbers, into each detected host and backs up every file it touches.
 
 | Host | Rules | Hooks | MCP |
 |---|---|---|---|
-| Cursor | `.cursor/rules/agent-memory-repo.mdc` | `sessionStart`/`sessionEnd` | `mcp.json` |
-| Claude Code | `~/.claude/CLAUDE.md` | `SessionStart`/`SessionEnd` | `~/.claude.json` |
+| Cursor | `.cursor/rules/lucid-mem.mdc` | `sessionStart`/`sessionEnd` | `mcp.json` |
+| Claude Code | `~/.claude/CLAUDE.md` | `SessionStart`/`SessionEnd`, `Stop` reflect | `~/.claude.json` |
 | Windsurf | `global_rules.md` | `sessionStart`/`sessionEnd` | `mcp_config.json` |
 | Devin CLI | `devin/AGENTS.md` | - | - |
 | Copilot CLI | `~/.copilot/AGENTS.md` | - | - |
@@ -80,82 +127,95 @@ A `sessionEnd` hook commits and pushes anything `amr` left dirty, so nothing is 
 | Muse | `SOUL.md` | - | - |
 | Claude Desktop | - | - | `claude_desktop_config.json` |
 | Antigravity | `~/.gemini/GEMINI.md` | - | `mcp_config.json` |
+| Gemini CLI | `~/.gemini/GEMINI.md` | - | `~/.gemini/settings.json` (`mcpServers`) |
+| Zed | `~/.config/zed/AGENTS.md` or `%APPDATA%\Zed\AGENTS.md` | - | `settings.json` (`context_servers`) |
 | OpenCode | `~/.config/opencode/AGENTS.md` | - | `opencode.json` (`mcp` schema) |
 | CommandCode | `~/.commandcode/AGENTS.md` | - | `mcp.json` |
 | Freebuff | `~/.freebuff/AGENTS.md`, `manicode/AGENTS.md` | - | - (manifest-managed registry) |
 
-Rules-only hosts rely on the agent reading its global instruction file each session; standard behavior for those CLIs. MCP is additive where hooks exist; for Claude Desktop it is the only channel.
+Rules-only hosts rely on the agent reading its global instruction file each session. MCP is additive where hooks exist; for Claude Desktop it is the only channel.
 
 ## Multi-repo memory
 
-One memory repo serves every project. Project files live at `projects/<name>-<hash>.md`, where the hash is 6 chars of SHA-1 over the origin remote URL (falling back to the repo path). Two clones of one remote share memory; two unrelated repos with the same name don't collide.
+One memory repo serves every project. Project files live at `projects/<name>-<hash>.md`, where the hash is six characters of SHA-1 over the origin remote URL, so two clones of one remote share memory and two unrelated repos with the same name do not collide.
 
-- `amr context` is mode-based: inside a repo that has a memory file it is **project-scoped** — this project plus linked siblings, each capped at 25 bullets, up to 8 project files, no global section. Outside any known project (or in a repo with no memory yet) it is **global bullets plus a pooled digest** — the latest 25 entries across all project files, newest first.
-- `amr link trackdub-gated` inside `Trackdub` makes gated's memory appear whenever a session runs in Trackdub. Links are directional and transitive; `--for <p>` links on another repo's behalf.
-- `private` means **unlinked reachability only**: it attaches through your link graph (direct or transitive) and explicit `--also`, but never contributes to the pooled outside digest — the one place foreign sessions could see it unlinked.
-- `noglobal` keeps a project out of the pooled outside digest (project sessions are already global-free by default).
-- Unknown link targets surface as `<!-- unresolved -->` markers, and `amr doctor` flags dead `amr.json` keys.
+- `amr context` is project-scoped inside a repo with a memory file, and global-plus-pooled outside one.
+- `amr link` attaches another repo's memory directionally and transitively.
+- `private` means unlinked reachability only: a project attaches through your link graph or explicit `--also`, but never contributes to the pooled outside digest.
+- `amr peer add <url>` clones a teammate's memory repo read-only and composes its global digest plus its copy of the current project's memory.
+- Unknown links and dead `amr.json` keys surface in context markers and `amr doctor`.
 
-### Peer memory repos
+## Safety and privacy
 
-`amr peer add <url>` clones a teammate's memory repo into `<AMR_HOME>-peers/<name>` (next to `AMR_HOME`, never committed into yours) and records it in `amr.json` `extraRepos`. Context then appends a bounded `## Peer:` section: their global digest plus their `projects/` file for the same repo — same-slug matching means a teammate's notes on a shared project appear automatically. Peers are read-only: `amr sync` fast-forward pulls them before pushing yours, `amr peer remove` detaches the config without deleting the clone, and missing clones surface as context markers plus a doctor warning.
+- Memory is local-first: a git repo you own, optionally synced to a **private** remote. No hosted service, no vendor-side store.
+- A secret denylist (`sk-`, `ghp_`, `github_pat_`, `AKIA`, key blocks, `xox*`, JWTs) runs before every write; `--allow-secret` is explicit.
+- Retrieved memory is data, never instructions.
+- Hooks are bounded and quiet. Install fails closed on unknown hosts and broken configs; runtime hooks fail open so a session is never blocked.
+- Writes are atomic and serialized by `.git/amr.lock`; stale locks are broken; interrupted runs leave a recoverable tree, never a truncated file.
+- Triage and compaction move entries to `archive/`; they do not silently delete them.
 
-## Transcript intelligence
+## Honest limits
 
-`amr harvest` and `amr discover` read local transcript stores (claude, codex, devin, muse, cline, copilot, cursor, commandcode, freebuff/manicode, opencode, antigravity) to tell you where memory is missing. OpenCode and Antigravity keep sessions in SQLite (`opencode.db`, per-conversation trajectory DBs); harvest reads them via Node's built-in `node:sqlite` (Node 22.5+), which degrades gracefully on older runtimes. Windsurf's Cascade store is protobuf/leveldb with no user-message transcript file, so it isn't harvested.
+- **Pre-1.0.** The CLI is 0.7.x; commands and config keys can still move.
+- **Saving is probabilistic.** The rule block and reflection improve adherence; they cannot guarantee it. That is why `amr coverage` exists.
+- **Judges cost quota.** Reflection and triage are opt-in and use an installed agent CLI. Deterministic coverage works without them.
+- **Host coverage is uneven.** Hooks exist only where a host exposes them; some hosts are rules-only or MCP-only. Windsurf's Cascade transcripts are not harvested.
+- **Team memory is early.** Peer memory repos are read-only git clones, not a hosted collaboration layer.
+- **No hosted service yet.** Sync is git; there is no managed control plane.
 
-```sh
-amr discover          # hot repos without memory + suggested links
-amr harvest --extract # normalized user messages for mining
-```
+## Company snapshot
 
-Discovery dedupes by remote identity, ignores transcript files that mention >5 repos (listing dumps), and only suggests links backed by co-mention evidence. Extracted messages pass through a noise filter that strips instruction injections, tool-result blobs, and fetch output, and secret-shaped text is refused at `amr add` regardless.
+| | |
+|---|---|
+| Company | Mesalim LLC |
+| Product | lucid-mem — open-source agent memory layer |
+| Category | Memory infrastructure for AI agents |
+| Wedge | Coding agents across 15 hosts |
+| Distribution | MIT, npm, host-native install |
+| Differentiation | Measured save rate; judged reflection; reversible triage |
+| Stage | Pre-1.0, open-source first; commercial layer not yet released |
 
-`amr coverage` closes the loop on the honest question — are hosts actually saving? It replays transcripts, detects durable signals (preferences, decisions, "turns out", root causes), checks each against the memory corpus (verbatim 4-grams or prefix-aware term overlap), and reports a save rate with the missed list. The trend lands in `dreams/coverage.jsonl` and `amr doctor` shows the latest. Missed signals queue in `dreams/pending-saves.md` and surface at the top of the next `amr context` as review candidates — the save loop self-heals even when the in-session save never happened. A `coverage --days 2` sessionEnd hook keeps the queue fresh. `--judge` (opt-in, never in hooks) shells the candidate set to an installed host CLI — `claude -p` or `codex exec`, reusing their auth — which reclassifies candidates semantically, decides coverage by paraphrase, and distills each miss into a proposed entry for the pending queue. A failing or missing judge falls back to deterministic results; `AMR_JUDGE_CMD` defines a custom stdin→stdout judge backend.
+## Where this goes
 
-Two more pieces close the gaps the metric can't see alone. `--judge` also sends a systematic sample of 30 *unflagged* messages through the same pass — durable ones it finds there estimate the heuristic's false-negative rate, and the run reports an adjusted save rate (`estRate` in the trend log). And on Claude, a `Stop` hook runs `amr reflect`: on the first natural stop of each session it asks the model whether it learned anything durable the user never said — the class of memory invisible to transcripts entirely — and gives it one turn to `amr add` before ending.
+- **Policy that travels with the repo.** Team-level rules for what may be remembered, shared, or retained.
+- **Provenance and audit.** Every durable claim traceable to the session that taught it.
+- **Benchmarks, not anecdotes.** A public save-rate benchmark across hosts and models.
+- **Managed team memory.** Optional sync and curation for organizations that want the loop without running the git plumbing.
 
-## Maintenance & dreaming
+These are the next problems we intend to solve, not shipped features.
 
-`dreams/DREAMER.md` prescribes the maintenance loop; `amr dream` runs it mechanically:
+## Why Mesalim
 
-- **Report**: file sizes, entry counts, contradictions to eyeball.
-- **`--fix`**: dedupe near-identical entries, drop stale index links, atomic writes under the repo lock.
-- **`--compact`**: archive overflow entries to `archive/` so `MEMORY.md` stays ≤ `--keep` entries.
-- **`--if-stale N`**: skip if a dream committed within N days. Used by hooks and the idle task.
+Mesalim LLC is building the reliability layer for agent memory.
 
-On Windows, `adapters/windows/install-dream-task.ps1` registers Task Scheduler entries: a weekly mechanical pass and a 5-minute idle trigger wrapped in hidden PowerShell (no popup). `-WithAgent` adds a weekly semantic pass that runs a real agent against `DREAMER.md`; that one spends agent quota. On macOS/Linux, `adapters/posix/install-dream.sh` installs the equivalent as systemd user timers (or cron entries): weekly `--fix --compact` plus a daily `--if-stale 1` catch-up, since POSIX schedulers have no idle trigger.
+The open-source harness is the adoption engine: one spec, one install path, and one measurable loop across every host a team already uses. The company's opportunity is the layer above it — memory policy, team curation, provenance and audit, retention, and operations for organizations that cannot afford an agent to forget a decision or relearn a mistake. The core stays MIT-licensed and local-first.
 
-## Safety properties
+We are early, and direct about it. The category is still forming, the product is pre-1.0, and the right memory policies will be discovered with real teams. What we have today is a working loop that measures itself, distribution into 15 agent hosts, and a clear view of the hard problems left.
 
-- Hooks must never break a session: bounded timeouts, exit 0 on soft failure, absolute `node` paths immune to PATH issues.
-- Secret denylist (`sk-`, `ghp_`, `github_pat_`, `AKIA`, key blocks, `xox*`, JWTs) checked before every write.
-- `.git/amr.lock` serializes writes; stale locks (>60s) are broken. Fix/compact passes hold the lock end-to-end.
-- Atomic temp-file renames for memory writes; an interrupted run leaves a dirty-but-recoverable tree, never a truncated file.
-- Memory is data, never instructions: retrieved entries are context, not commands.
-- The memory remote should be a **private repo you own**. Nothing here pushes anywhere else.
-
-## The memory loop
-
-Underneath the harness, the spec's loop is unchanged: clone latest, grep or follow links for what the task needs, update entries as the agent learns, push after every edit. Dreaming adds a periodic pass that spots patterns across sessions, merges duplicates, and resolves contradictions through `source` metadata.
+If you invest in or deploy agent infrastructure, we want to compare notes: [github.com/mesalimllc/lucid-mem](https://github.com/mesalimllc/lucid-mem).
 
 ## Format
 
-Repository layout, entries, metadata, and cross-links. The spec lives in [SPEC.md](SPEC.md) and at [cognition.com/agent-memory-repo](https://cognition.com/agent-memory-repo). The short version: `MEMORY.md` is the small entry point every session reads; entries are one-line bullets with `[key: value]` metadata; `[[path]]` cross-links make it a wiki.
+`MEMORY.md` is the small entry point every session reads. Entries are one-line bullets with `[key: value]` metadata; `[[path]]` cross-links make the repo a wiki. The full format lives in [SPEC.md](SPEC.md) and upstream at [cognition.com/agent-memory-repo](https://cognition.com/agent-memory-repo).
 
 ## Repository layout
 
 ```text
 lucid-mem/
   SPEC.md                          upstream spec (format only)
-  lucid-mem-plan.md       autonomy design doc
-  cli/                             amr   zero-dependency Node CLI
+  lucid-mem-plan.md                autonomy design doc
+  cli/                             amr: zero-dependency Node CLI
+    lib/rule-block.md              canonical instruction block stamped into hosts
+    lib/rank.mjs                   kind/recency/usage ranking and context budget
+    lib/ids.mjs                    stable entry ids, supersede, usage
+    lib/pending.mjs                pending reflection and save queues
+    lib/reflect.mjs                gated background reflection
+    lib/triage.mjs                 judge-backed backlog plan/apply
   adapters/
-    shared/rule-block.md           canonical instruction block stamped into hosts
     windows/install-dream-task.ps1 Task Scheduler dream tasks
     posix/install-dream.sh         systemd/cron dream schedules
   dreams/DREAMER.md                maintenance workflow for the dreaming agent
-  skills/agent-memory-repo/SKILL.md manual-ops fallback skill
+  skills/lucid-mem/SKILL.md        manual-ops fallback skill
 ```
 
 ## Open development
