@@ -117,3 +117,49 @@ test('outside context pools latest project entries; private and noglobal exclude
   assert.ok(!r.stdout.includes('pc secret fact'));
   assert.ok(!r.stdout.includes('pd quiet fact'));
 });
+
+test('context ranks by kind/recency within a budget; `amr used` boosts entries, search does not', () => {
+  const home = tmpdir();
+  const run0 = (args) => run(args, { amrHome: home });
+  run0(['ensure']);
+  const mem = path.join(home, 'MEMORY.md');
+  const rows = [];
+  for (let i = 0; i < 10; i++)
+    rows.push(`- old filler fact number ${i} about nothing much at all [added: 2025-01-01; kind: fact; id: a00${i}]`);
+  rows.push('- When CI flakes, re-run once, because runners are flaky [added: 2026-10-20; kind: pitfall; id: b001]');
+  fs.writeFileSync(mem, `# Memory\n\n${rows.join('\n')}\n\n## Index\n`);
+  const tight = run0(['context', '--budget', '10']).stdout;
+  assert.match(tight, /When CI flakes/);
+  assert.match(tight, /lower-ranked entries omitted/);
+  assert.equal((tight.match(/old filler fact/g) || []).length, 2);
+  // Surfacing an entry in a search is not a use: it must not rank higher.
+  run0(['search', 'number 7']);
+  assert.doesNotMatch(run0(['context', '--budget', '10']).stdout, /number 7/);
+  // Marking it used (it helped) lifts it above its peers.
+  assert.match(run0(['used', 'a007']).stdout, /marked used: a007/);
+  const after = run0(['context', '--budget', '10']).stdout;
+  assert.match(after, /number 7/);
+  assert.match(run0(['context', '--full']).stdout, /number 0/);
+});
+
+test('context clips oversized floor entries so the budget overrun stays bounded', () => {
+  const home = tmpdir();
+  const run0 = (args) => run(args, { amrHome: home });
+  run0(['ensure']);
+  const huge = (n) => `- huge entry ${n} ${'detail '.repeat(700)}[added: 2026-10-20; kind: pitfall; id: c00${n}]`;
+  fs.writeFileSync(
+    path.join(home, 'MEMORY.md'),
+    `# Memory\n\n${[1, 2, 3].map(huge).join('\n')}\n\n## Index\n`
+  );
+  const out = run0(['context', '--budget', '10']).stdout;
+  const lines = out.split('\n').filter((l) => l.startsWith('- huge entry'));
+  // The floor still shows the top three entries...
+  assert.equal(lines.length, 3);
+  for (const [i, l] of lines.entries()) {
+    // ...each clipped to the floor cap, with its id meta intact.
+    assert.ok(l.length <= 240, `entry ${i + 1} is ${l.length} chars`);
+    assert.match(l, /…\s*\[added: 2026-10-20; kind: pitfall; id: c00\d\]$/);
+  }
+  // --full is the escape hatch: nothing clipped.
+  assert.ok(run0(['context', '--full']).stdout.includes('detail '.repeat(700).trim()));
+});

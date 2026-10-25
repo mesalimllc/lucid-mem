@@ -1,4 +1,8 @@
+import crypto from 'node:crypto';
 import fs from 'node:fs';
+import { spawn } from 'node:child_process';
+import os from 'node:os';
+import { fileURLToPath } from 'node:url';
 import path from 'node:path';
 import {
   addIndexLink,
@@ -14,6 +18,12 @@ import {
   looksSecret,
   normName,
   projectEntry,
+  KINDS,
+  numFlag,
+  STATE_TTL_DAYS,
+  addDays,
+  episodicHits,
+  isExpired,
   projectFor,
   pullFfOnly,
   resolveHome,
@@ -23,6 +33,9 @@ import {
   today,
   withLock,
 } from './core.mjs';
+import { DEFAULT_BUDGET, bumpUsage, loadUsage, pickWithinBudget } from './rank.mjs';
+import { ID_RE, entryId, findById, newId, scanIds } from './ids.mjs';
+import { drainReflections, pendingReflectionLines } from './pending.mjs';
 
 const out = (s = '') => process.stdout.write(s + '\n');
 const err = (s) => process.stderr.write(s + '\n');
@@ -72,13 +85,102 @@ export function cmdReflect() {
     p = JSON.parse(raw);
   } catch {}
   if (p.stop_hook_active) return;
+  if (!reflectDue(p)) return;
+  // Default: reflect in a detached background process; the session sees
+  // nothing. AMR_REFLECT=block restores the in-session prompt.
+  if (process.env.AMR_REFLECT !== 'block') {
+    // Random name plus exclusive create: a symlink planted at a guessable
+    // path in the shared tmpdir cannot redirect the write. A failed write
+    // leaves the hook silent.
+    try {
+      const f = path.join(os.tmpdir(), `amr-reflect-${crypto.randomBytes(8).toString('hex')}.json`);
+      fs.writeFileSync(f, JSON.stringify(p), { flag: 'wx', mode: 0o600 });
+      const cli = path.join(path.dirname(fileURLToPath(import.meta.url)), '..', 'amr.mjs');
+      spawn(process.execPath, [cli, 'reflect-run', f], {
+        detached: true,
+        stdio: 'ignore',
+        windowsHide: true,
+      }).unref();
+    } catch {}
+    return;
+  }
   out(
     JSON.stringify({
       decision: 'block',
       reason:
-        'Before finishing: did you learn anything durable this session — a fact, decision, preference, root cause, or convention the user never explicitly stated? If yes, save each one now with `amr add "concise entry"` (use --project for repo-scoped memory). If nothing qualifies, end normally.',
+        'Before finishing: did you learn anything durable this session ' +
+        '(a pitfall, decision, preference, or convention the user never stated)? ' +
+        'If yes, save each as "When X, do Y, because Z" with `amr add --project "..."` or `amr add "..."`. ' +
+        'Skip session state: PR numbers, SHAs, run IDs. If nothing qualifies, end normally.',
     })
   );
+}
+
+// Reflection costs a judge run, so only fire after real work since the
+// last reflection in this session: enough changing tool calls (edits,
+// or shell commands that write, commit, push or open PRs), or enough
+// tool calls of any kind, which catches investigation-only sessions that
+// end in a root cause without editing. Without a transcript, stay quiet.
+const WORK_TOOLS = new Set(['Edit', 'Write', 'MultiEdit', 'NotebookEdit']);
+const SHELL_TOOLS = new Set(['Bash', 'PowerShell']);
+const REFLECT_MIN_WORK = 6;
+const REFLECT_MIN_CALLS = 20;
+
+// Shell commands that change files, history or remote state. Redirects
+// to /dev/null, $null or 2>&1 do not count as writes.
+export function shellChanges(cmd) {
+  const c = String(cmd || '').replace(/\d?>\s*(?:&\d|\/dev\/null|\$null|nul)\b/gi, '');
+  // For the redirect test only: quoted strings (inline scripts, jq or
+  // awk filters) become a placeholder and arrows/comparisons drop, so
+  // `node -e "x.map(a=>a)"` or `jq '.n > 1'` is not a write.
+  const bare = c.replace(/'[^']*'|"[^"]*"/g, 'Q').replace(/=>|>=/g, '');
+  return (
+    /\bgit\s+(?:commit|push|merge|cherry-pick|rebase|revert|apply|am)\b/.test(c) ||
+    /\bgh\s+(?:pr|issue)\s+(?:create|merge|comment|edit|close)\b/.test(c) ||
+    /\bsed\s+(?:-[a-zA-Z]*i|--in-place)/.test(c) ||
+    /(?:^|[^<>&\d])>{1,2}\s*[^\s&|>]/.test(bare) ||
+    /\b(?:tee|mv|cp|rm|mkdir|touch)\s/.test(c) ||
+    /\b(?:writeFileSync|appendFileSync|Set-Content|Add-Content|Out-File|New-Item|Remove-Item|Copy-Item|Move-Item)\b/.test(c)
+  );
+}
+
+function reflectDue(p) {
+  if (!p.transcript_path || !p.session_id) return false;
+  let work = 0;
+  let calls = 0;
+  try {
+    for (const line of fs.readFileSync(p.transcript_path, 'utf8').split('\n')) {
+      if (!line.includes('"tool_use"')) continue;
+      let o;
+      try {
+        o = JSON.parse(line);
+      } catch {
+        continue;
+      }
+      const content = o?.message?.content;
+      if (!Array.isArray(content)) continue;
+      for (const c of content) {
+        if (c?.type !== 'tool_use') continue;
+        calls++;
+        if (WORK_TOOLS.has(c.name)) work++;
+        else if (SHELL_TOOLS.has(c.name) && shellChanges(c.input?.command)) work++;
+      }
+    }
+  } catch {
+    return false;
+  }
+  const stateDir = path.join(os.tmpdir(), 'amr-reflect');
+  const stateFile = path.join(stateDir, `${String(p.session_id).replace(/[^\w-]/g, '_')}.json`);
+  let seen = { work: 0, calls: 0 };
+  try {
+    seen = { ...seen, ...JSON.parse(fs.readFileSync(stateFile, 'utf8')) };
+  } catch {}
+  if (work - seen.work < REFLECT_MIN_WORK && calls - seen.calls < REFLECT_MIN_CALLS) return false;
+  try {
+    fs.mkdirSync(stateDir, { recursive: true });
+    fs.writeFileSync(stateFile, JSON.stringify({ work, calls }));
+  } catch {}
+  return true;
 }
 
 export function cmdContext(flags) {
@@ -90,17 +192,34 @@ export function cmdContext(flags) {
 
   const mem = fs.readFileSync(path.join(home, 'MEMORY.md'), 'utf8');
   const idxSplit = mem.split(/^##\s+Index\s*$/m);
-  const bullets = (s) => s.split(/\r?\n/).filter((l) => l.trim().startsWith('- '));
+  const bullets = (s) =>
+    s.split(/\r?\n/).filter((l) => l.trim().startsWith('- ') && !isExpired(l));
   const full = !!flags.full;
-  // Append order means newest are last; keep the tail and point to search.
-  const cap = (arr, n) =>
+  const cfg = loadConfig(home);
+  // Tail cap (newest N) for lists that aren't ranked: index links, peers.
+  const capTail = (arr, n) =>
     full || arr.length <= n
       ? arr
       : [
           `- … ${arr.length - n} older entries omitted — run \`amr search "term"\` or \`amr context --full\``,
           ...arr.slice(-n),
         ];
-  const cfg = loadConfig(home);
+  // Ranked cap: best entries by kind/recency/usage within a shared char
+  // budget across sections (see rank.mjs).
+  let remaining = numFlag(flags.budget, cfg.contextBudget ?? DEFAULT_BUDGET);
+  const usage = loadUsage(home);
+  const cap = (arr, n) => {
+    if (full) return arr;
+    const picked = pickWithinBudget(arr, n, remaining, usage, (l) => episodicHits(l).length > 0);
+    remaining -= picked.chars;
+    if (picked.clipped && picked.items.length === arr.length) return picked.items;
+    return picked.items.length === arr.length
+      ? arr
+      : [
+          `- … ${arr.length - picked.items.length} lower-ranked entries omitted — run \`amr search "term"\` or \`amr context --full\``,
+          ...picked.items,
+        ];
+  };
   const entry = proj ? projectEntry(cfg, proj) : null;
   // Two modes: inside a repo that has a memory file, the digest is
   // project-scoped — this project plus its linked siblings only, no
@@ -112,7 +231,7 @@ export function cmdContext(flags) {
     fs.existsSync(path.join(home, 'projects', `${proj.slug}.md`));
   const inProject = projHasFile;
   const globalLines = inProject ? [] : cap(bullets(idxSplit[0] || ''), 25);
-  const indexLinks = cap(bullets(idxSplit[1] || ''), 12);
+  const indexLinks = capTail(bullets(idxSplit[1] || ''), 12);
 
   // Attach list: the current project, then its config links
   // (transitive, deduped, max 8 total) and any --also names.
@@ -186,16 +305,19 @@ export function cmdContext(flags) {
   // Unsaved-signal queue from the last `amr coverage` run: durable
   // statements that were never saved. Same surface in both modes; the
   // next session reviews and saves the real ones.
+  // Background-reflection proposals (pending.mjs) share the section: both
+  // are unsaved and wait for a session to accept or ignore them.
   const pending = path.join(home, 'dreams', 'pending-saves.md');
-  if (fs.existsSync(pending)) {
-    const items = bullets(fs.readFileSync(pending, 'utf8')).slice(0, 8);
-    if (items.length)
-      lines.push(
-        '',
-        '## Pending memory candidates (unsaved — review, `amr add` the real ones)',
-        items.join('\n')
-      );
-  }
+  const items = [
+    ...pendingReflectionLines(home, undefined, proj?.slug ?? null),
+    ...(fs.existsSync(pending) ? bullets(fs.readFileSync(pending, 'utf8')) : []),
+  ].slice(0, 8);
+  if (items.length)
+    lines.push(
+      '',
+      '## Pending memory candidates (unsaved — review, `amr add` / `amr update <id>` the real ones)',
+      items.join('\n')
+    );
   if (indexLinks.length) lines.push('', '## Index', indexLinks.join('\n'));
   if (unknown.length)
     lines.push(
@@ -214,7 +336,7 @@ export function cmdContext(flags) {
       missingPeers.push(p.name);
       continue;
     }
-    const g = cap(
+    const g = capTail(
       bullets(
         fs.readFileSync(pm, 'utf8').split(/^##\s+Index\s*$/m)[0] || ''
       ),
@@ -225,7 +347,7 @@ export function cmdContext(flags) {
     if (proj) {
       const pf = path.join(dir, 'projects', `${proj.slug}.md`);
       if (fs.existsSync(pf)) {
-        const pb = cap(bullets(fs.readFileSync(pf, 'utf8')), 8);
+        const pb = capTail(bullets(fs.readFileSync(pf, 'utf8')), 8);
         if (pb.length)
           lines.push(`### ${p.name} memory for this project`, pb.join('\n'));
       }
@@ -295,12 +417,19 @@ function targetFile(home, flags) {
   };
 }
 
-function buildEntry(text, flags, proj) {
+function buildEntry(text, flags, proj, id) {
   const meta = [`added: ${today()}`];
   if (flags.kind) meta.push(`kind: ${flags.kind}`);
+  if (flags.kind === 'state')
+    meta.push(`expires: ${addDays(numFlag(flags.ttl, STATE_TTL_DAYS))}`);
   if (proj) meta.push(`project: ${proj.name}`);
+  if (id) meta.push(`id: ${id}`);
   return `- ${text.replace(/\s+/g, ' ').trim()} [${meta.join('; ')}]`;
 }
+
+// Moved to core.mjs so dream's backlog pass can share it; re-exported
+// for existing importers.
+export { episodicHits };
 
 export function cmdAdd(text, flags) {
   const home = ensureRepo();
@@ -309,17 +438,21 @@ export function cmdAdd(text, flags) {
     process.exitCode = 1;
     return;
   }
+  if (flags.kind && !KINDS.includes(flags.kind))
+    throw new Error(`unknown kind "${flags.kind}"; use one of ${KINDS.join('|')}`);
   const t = targetFile(home, flags);
   const isNew = !fs.existsSync(t.abs);
   const created = isNew && t.rel !== 'MEMORY.md';
 
+  let newEntryId = null;
   const result = withLock(home, () => {
     if (entryExists(t.abs, text)) return 'duplicate';
     if (created) {
       fs.mkdirSync(path.dirname(t.abs), { recursive: true });
       fs.writeFileSync(t.abs, `${t.title}\n`);
     }
-    insertEntry(t.abs, buildEntry(text, flags, t.proj), {
+    newEntryId = newId(scanIds(home));
+    insertEntry(t.abs, buildEntry(text, flags, t.proj, newEntryId), {
       beforeIndex: t.beforeIndex,
     });
     const files = [t.rel];
@@ -329,30 +462,42 @@ export function cmdAdd(text, flags) {
     return 'saved';
   });
 
+  drainReflections(home, text);
   if (result === 'duplicate') out('already saved');
   else {
     if (hasRemote(home))
       git(home, ['push'], { timeout: 10000 });
-    out(`saved to ${t.rel}`);
+    out(`saved to ${t.rel} [id ${newEntryId}]`);
+    const hits = flags.kind === 'state' ? [] : episodicHits(text);
+    if (hits.length)
+      err(
+        `warning: entry looks like session state (${hits.join(', ')}); it will go stale. Prefer "When X, do Y, because Z", or re-save with --kind state (expires in ${STATE_TTL_DAYS}d).`
+      );
   }
 }
 
 export function cmdUpdate(match, text, flags) {
   const home = ensureRepo();
-  const t = targetFile(home, flags);
+  // An id (amr update a3f9 "...") addresses an entry in any file.
+  const byId = ID_RE.test(match) ? findById(home, match) : null;
+  const t = byId
+    ? { rel: byId.rel, abs: path.join(home, byId.rel) }
+    : targetFile(home, flags);
   if (!fs.existsSync(t.abs)) {
     err(`no memory file: ${t.rel}`);
     process.exitCode = 1;
     return;
   }
   const lines = fs.readFileSync(t.abs, 'utf8').split(/\r?\n/);
-  const hits = lines
-    .map((l, i) => ({ l, i }))
-    .filter(
-      ({ l }) =>
-        l.trim().startsWith('- ') &&
-        l.toLowerCase().includes(match.toLowerCase())
-    );
+  const hits = byId
+    ? [{ l: lines[byId.line], i: byId.line }]
+    : lines
+        .map((l, i) => ({ l, i }))
+        .filter(
+          ({ l }) =>
+            l.trim().startsWith('- ') &&
+            l.toLowerCase().includes(match.toLowerCase())
+        );
   if (hits.length !== 1) {
     err(
       hits.length === 0
@@ -373,15 +518,27 @@ export function cmdUpdate(match, text, flags) {
     fs.writeFileSync(t.abs, lines.join('\n'));
     commit(home, [t.rel], `Update memory: ${text.slice(0, 50)}`);
   });
+  drainReflections(home, text);
   if (hasRemote(home)) git(home, ['push'], { timeout: 10000 });
-  out(`updated ${t.rel}`);
+  const eid = entryId(lines[i]);
+  out(`updated ${t.rel}${eid ? ` [id ${eid}]` : ''}`);
 }
 
 export function cmdSearch(term) {
   const home = ensureRepo();
   const r = git(home, ['grep', '-n', '-i', '--', term]);
   if (r.code !== 0 || !r.stdout) out('no matches');
+  // Surfacing is not using: counting search hits would keep promoting
+  // whatever already matches common terms. Only `amr used` ranks entries.
   else out(r.stdout);
+}
+
+// amr used <id...> — mark entries that actually helped.
+export function cmdUsed(ids) {
+  const home = ensureRepo();
+  const good = ids.filter((i) => ID_RE.test(i) && findById(home, i));
+  bumpUsage(home, good);
+  out(good.length ? `marked used: ${good.join(', ')}` : 'no matching ids');
 }
 
 export function cmdIndex() {

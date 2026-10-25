@@ -1,6 +1,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { ensureRepo, resolveProjectSlug } from './core.mjs';
 import {
   cmdAdd,
   cmdContext,
@@ -14,10 +15,13 @@ import {
   cmdSearch,
   cmdSync,
   cmdUnlink,
+  cmdUsed,
   cmdUpdate,
 } from './commands.mjs';
 import { cmdDiscover } from './discover.mjs';
 import { cmdDream } from './dream.mjs';
+import { cmdReflectRun } from './reflect.mjs';
+import { cmdIds, cmdSupersede } from './ids.mjs';
 import { cmdHarvest } from './harvest.mjs';
 import { cmdCoverage } from './coverage.mjs';
 import { cmdDoctor, cmdInstall, cmdUninstall } from './install.mjs';
@@ -28,9 +32,12 @@ const USAGE = `amr: agent memory CLI (lucid-mem)
 usage: amr <command> [args] [flags]
 
   ensure                        create/verify the memory repo ($AMR_HOME, default ~/agent-memory)
-  context [dir]                 session digest: project-scoped inside a known repo; global + pooled projects outside
+  context [dir] [--budget N]    ranked session digest (default 6000 chars; --full ignores): project-scoped inside a known repo; global + pooled projects outside
   add "text"                    save a memory entry
-  update "match" "text"         replace an existing entry in place
+  update <id|"match"> "text"   replace an entry in place; ids look like a3f9 (shown in entry meta)
+  supersede <id> ["text"]       retire an entry to archive/superseded.md, optionally with a replacement
+  used <id...>                  mark entries that helped (boosts them in context ranking)
+  ids                           assign ids to entries that lack them
   search "term"                 grep all memory files
   index                         rebuild MEMORY.md index from files on disk
   link <name...> [--for <p>]    auto-attach other repos' memories to this repo's sessions
@@ -41,22 +48,31 @@ usage: amr <command> [args] [flags]
   sync                          pull --rebase + push (no-op without a remote)
   doctor                        check repo, PATH, and per-host wiring
   dream [--days N] [--fix] [--compact] [--keep N] [--json]   memory health; --fix cleans up, --compact archives overflow; --spin plays the animation
+  dream --triage [--limit N] [--apply]   judge sorts session-state-looking entries into keep/rewrite/archive; plan first, --apply to commit it
   harvest [--days N] [--json] [--extract] [--max N] [--min C]   list transcripts; --extract streams normalized user messages
   discover [--days N] [--min N] [--json]   rank repos by transcript mentions; shows memory coverage + suggested links
   coverage [--days N] [--json] [--no-log] [--judge claude|codex|env]  save-rate metric: durable transcript signals vs memory repo
-  reflect                       session-end reflection (wired as a Claude Stop hook; reads hook JSON on stdin)
+  reflect                       Stop hook: gated, saves learnings via a background judge (AMR_REFLECT=block prompts in-session)
   install [--host a,b|all]      wire hooks + rules + MCP into detected agent hosts
   uninstall [--host a,b|all]    remove amr hooks + rules + MCP entries
   serve                         stdio MCP server (memory_context/add/search/update)
 
 flags:
-  --project [name]              scope the entry to the current repo, or a named project
+  --project[=name]              scope the entry to the current repo, or a named project
   --also a,b                    attach extra projects to the context digest
   --file <topic>                write to a topic file instead of MEMORY.md
-  --kind <k>                    add kind metadata (preference|fact|decision|howto)
+  --kind <k>                    add kind metadata (pitfall|decision|preference|fact|howto|state)
   --cwd <dir>                   resolve project/host context against this dir
   --allow-secret                bypass secret-shape refusal
 `;
+
+// Flags that never take a value. Without this, `amr add --project "text"`
+// swallowed the entry text as the flag's value. --project scopes by name
+// only in the `--project=name` form.
+const BOOL_FLAGS = new Set([
+  'project', 'full', 'json', 'fix', 'compact', 'inline', 'spin',
+  'extract', 'no-log', 'allow-secret', 'if-stale-off', 'triage', 'apply',
+]);
 
 function parseFlags(argv) {
   const flags = {};
@@ -66,12 +82,37 @@ function parseFlags(argv) {
     if (a.startsWith('--')) {
       const eq = a.indexOf('=');
       if (eq >= 0) flags[a.slice(2, eq)] = a.slice(eq + 1);
-      else if (i + 1 < argv.length && !argv[i + 1].startsWith('--'))
+      else if (
+        !BOOL_FLAGS.has(a.slice(2)) &&
+        i + 1 < argv.length &&
+        !argv[i + 1].startsWith('--')
+      )
         flags[a.slice(2)] = argv[++i];
       else flags[a.slice(2)] = true;
     } else pos.push(a);
   }
   return { flags, pos };
+}
+
+// `amr add "text" --project other` (space form): a bare --project never
+// consumes a value, so the name would silently join the entry text and
+// save to the current repo. If the word right after --project names an
+// existing project, treat it as the scope; if it merely looks like a name,
+// say so on stderr instead of mis-saving quietly.
+function spaceFormProject(rest, flags, pos) {
+  if (flags.project !== true || pos.length < 2) return;
+  const at = rest.indexOf('--project');
+  const word = at >= 0 ? rest[at + 1] : undefined;
+  if (!word || word.startsWith('--') || !pos.includes(word)) return;
+  const slug = resolveProjectSlug(ensureRepo(), word);
+  if (slug) {
+    flags.project = slug;
+    pos.splice(pos.indexOf(word), 1);
+  } else if (pos.length === 2 && /^[a-z0-9._-]+$/i.test(word))
+    process.stderr.write(
+      `note: "--project ${word}" does not name a known project, so "${word}" was kept in the entry text. Use --project=${word} to scope by name.
+`
+    );
 }
 
 // Subcommands invoked by host session hooks. AMR_HOOKS_OFF is set on
@@ -84,6 +125,7 @@ const HOOK_CMDS = new Set(['context', 'sync', 'dream', 'coverage', 'reflect']);
 export function main(argv) {
   const [cmd, ...rest] = argv;
   const { flags, pos } = parseFlags(rest);
+  if (cmd === 'add' || cmd === 'update') spaceFormProject(rest, flags, pos);
   if (process.env.AMR_HOOKS_OFF && HOOK_CMDS.has(cmd)) return 0;
   try {
     switch (cmd) {
@@ -147,6 +189,19 @@ export function main(argv) {
         return cmdCoverage(flags);
       case 'reflect':
         return cmdReflect();
+      case 'used':
+        return cmdUsed(pos);
+      case 'ids':
+        return cmdIds();
+      case 'supersede':
+        if (!pos[0]) {
+          process.stderr.write('usage: amr supersede <id> ["replacement text"]\n');
+          process.exitCode = 1;
+          return;
+        }
+        return cmdSupersede(pos[0], pos.slice(1).join(' '));
+      case 'reflect-run':
+        return cmdReflectRun(pos[0]);
       case 'install':
         return cmdInstall(flags);
       case 'uninstall':

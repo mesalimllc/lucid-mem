@@ -211,11 +211,27 @@ export function withLock(repo, fn) {
   }
 }
 
+// A failed `git add` (typically index.lock held by another git process)
+// used to be ignored, so the commit silently left that file out. Retry
+// briefly, and report failure if any file still did not stage.
 export function commit(repo, files, msg) {
   ensureIdentity(repo);
-  for (const f of files) git(repo, ['add', '--', f]);
+  const unstaged = [];
+  for (const f of files) {
+    let r = git(repo, ['add', '--', f]);
+    for (let i = 0; i < 5 && r.code !== 0; i++) {
+      Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 200);
+      r = git(repo, ['add', '--', f]);
+    }
+    if (r.code !== 0) {
+      const why = (r.stderr || r.error?.message || '').trim().split('\n')[0];
+      unstaged.push(why ? `${f} (${why})` : f);
+    }
+  }
   const r = git(repo, ['commit', '-m', msg]);
-  return r.code === 0;
+  if (unstaged.length)
+    process.stderr.write(`amr: could not stage ${unstaged.join(', ')}; left uncommitted\n`);
+  return r.code === 0 && !unstaged.length;
 }
 
 export function hasRemote(repo) {
@@ -292,3 +308,37 @@ export function projectEntry(cfg, { slug, name }) {
   }
   return null;
 }
+
+// Entry kinds. `state` is session-scoped (what is open, what was just
+// committed) and expires; everything else is durable knowledge.
+export const KINDS = ['pitfall', 'decision', 'preference', 'fact', 'howto', 'state'];
+export const STATE_TTL_DAYS = 2;
+
+export const addDays = (days, from = new Date()) =>
+  new Date(from.getTime() + days * 864e5).toISOString().slice(0, 10);
+
+// The trailing [meta] group is the only place kind, expires and id are read
+// from: prose in an entry's text can say "expires:" without meaning it.
+export const trailingMeta = (line) =>
+  (String(line).match(/\[([^[\]]*)\]\s*$/) || [])[1] || '';
+
+export const entryKind = (line) =>
+  (trailingMeta(line).match(/kind:\s*([a-z-]+)/) || [])[1] || null;
+
+// Session state goes stale within hours and crowds out durable knowledge.
+const EPISODIC = [
+  [/\b(?=[0-9a-f]*\d)[0-9a-f]{7,40}\b/i, 'commit SHA'],
+  [/\b(?:PR|pull request)\s*#?\d+|#\d{2,}\b/i, 'PR/issue number'],
+  [/\b(?:run|job)\s*(?:id\s*)?\d{8,}\b|\b\d{10,}\b/i, 'run ID'],
+  [/\b(?:not pushed|just committed|currently open)\b/i, 'session state'],
+];
+
+export function episodicHits(text) {
+  return EPISODIC.filter(([re]) => re.test(text)).map(([, label]) => label);
+}
+
+// An entry is expired when its expires: date is before `now` (YYYY-MM-DD).
+export const isExpired = (line, now = today()) => {
+  const d = (trailingMeta(line).match(/expires:\s*(\d{4}-\d{2}-\d{2})/) || [])[1];
+  return !!d && d < now;
+};

@@ -2,7 +2,7 @@
 
 Autonomous, git-backed memory for AI coding agents. `amr` keeps what your agents learn across sessions and across repositories: it injects memory at session start, lets agents save durable facts while they work, syncs through git, and maintains itself with scheduled dreaming — no manual invocation.
 
-Implements the [Agent Memory Repo spec](https://github.com/AgentMemoryRepo/agentmemoryrepo). Full docs and per-host details live in the [project repo](https://github.com/tonythethompson/lucid-mem).
+Implements the [Agent Memory Repo spec](https://github.com/AgentMemoryRepo/agentmemoryrepo). Full docs and per-host details live in the [project repo](https://github.com/mesalimllc/lucid-mem).
 
 ## Install
 
@@ -42,6 +42,6 @@ One memory repo serves every project. `projects/<name>-<hash>.md` files key off 
 
 ## Links
 
-- Repo: https://github.com/tonythethompson/lucid-mem
+- Repo: https://github.com/mesalimllc/lucid-mem
 - Spec: https://github.com/AgentMemoryRepo/agentmemoryrepo
 - License: MIT

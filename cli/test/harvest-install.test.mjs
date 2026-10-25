@@ -93,10 +93,69 @@ test('install --host codex writes rules + mcp into a fake home, idempotent', () 
   const r1 = run(['install', '--host', 'codex'], { amrHome: home, fakeHome });
   assert.equal(r1.status, 0, r1.stderr);
   const agents = read(path.join(fakeHome, '.codex', 'AGENTS.md')) || '';
-  assert.match(agents, /agent-memory/);
+  assert.match(agents, /<!-- lucid-mem -->/);
   const toml = read(path.join(fakeHome, '.codex', 'config.toml')) || '';
   assert.match(toml, /mcp_servers\.agent-memory/);
   const r2 = run(['install', '--host', 'codex'], { amrHome: home, fakeHome });
   assert.equal(r2.status, 0);
   assert.match(r2.stdout + r2.stderr, /unchanged|already/);
+});
+
+test('install --host with one unknown name fails before installing anything', () => {
+  const home = tmpdir();
+  const fakeHome = tmpdir();
+  run(['ensure'], { amrHome: home });
+  const r = run(['install', '--host', 'codex,bogus'], { amrHome: home, fakeHome });
+  assert.notEqual(r.status, 0);
+  assert.match(r.stderr, /unknown host\(s\): bogus/);
+  // codex was valid, but nothing is installed when any name is a typo
+  assert.equal(fs.existsSync(path.join(fakeHome, '.codex')), false);
+});
+
+test('install leaves an unparseable MCP config untouched and exits nonzero', () => {
+  const home = tmpdir();
+  const fakeHome = tmpdir();
+  run(['ensure'], { amrHome: home });
+  const mcp = path.join(fakeHome, '.cursor', 'mcp.json');
+  fs.mkdirSync(path.dirname(mcp), { recursive: true });
+  const broken = '{ "mcpServers": { "other": { "command": "x" } }, // trailing comment\n';
+  fs.writeFileSync(mcp, broken);
+  const r = run(['install', '--host', 'cursor'], { amrHome: home, fakeHome });
+  assert.notEqual(r.status, 0);
+  assert.match(r.stdout, /mcp skipped \(unparseable\)/);
+  assert.match(r.stderr, /install incomplete for: cursor/);
+  // The app's config, and its other servers, survive byte-for-byte.
+  assert.equal(fs.readFileSync(mcp, 'utf8'), broken);
+});
+
+test('install migrates pre-rename agent-memory-repo blocks and files; uninstall clears both', () => {
+  const home = tmpdir();
+  const fakeHome = tmpdir();
+  run(['ensure'], { amrHome: home });
+  const legacy = '<!-- agent-memory-repo -->\nold rules\n<!-- /agent-memory-repo -->';
+  const codexMd = path.join(fakeHome, '.codex', 'AGENTS.md');
+  fs.mkdirSync(path.dirname(codexMd), { recursive: true });
+  fs.writeFileSync(codexMd, `my own rule\n\n${legacy}\n`);
+  const rulesDir = path.join(fakeHome, '.cursor', 'rules');
+  fs.mkdirSync(rulesDir, { recursive: true });
+  const oldMdc = path.join(rulesDir, 'agent-memory-repo.mdc');
+  fs.writeFileSync(oldMdc, `---\nalwaysApply: true\n---\n\n${legacy}\n`);
+
+  const r = run(['install', '--host', 'codex,cursor'], { amrHome: home, fakeHome });
+  assert.equal(r.status, 0, r.stderr);
+  const text = fs.readFileSync(codexMd, 'utf8');
+  assert.match(text, /my own rule/);
+  assert.match(text, /<!-- lucid-mem -->/);
+  assert.ok(!text.includes('agent-memory-repo'), 'legacy block replaced');
+  assert.equal((text.match(/<!-- lucid-mem -->/g) || []).length, 1);
+  assert.ok(!fs.existsSync(oldMdc), 'legacy cursor rule file removed');
+  assert.ok(fs.existsSync(path.join(rulesDir, 'lucid-mem.mdc')));
+
+  // uninstall also clears a not-yet-migrated legacy block
+  fs.writeFileSync(codexMd, `keep me\n\n${legacy}\n`);
+  const u = run(['uninstall', '--host', 'codex'], { amrHome: home, fakeHome });
+  assert.equal(u.status, 0, u.stderr);
+  const after = fs.readFileSync(codexMd, 'utf8');
+  assert.match(after, /keep me/);
+  assert.ok(!after.includes('agent-memory-repo'));
 });
