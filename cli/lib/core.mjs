@@ -181,14 +181,14 @@ export function addIndexLink(repo, relNoExt) {
   return true;
 }
 
-export function withLock(repo, fn) {
+export function withLock(repo, fn, { retries = 15, retryMs = 200 } = {}) {
   const lock = path.join(repo, '.git', 'amr.lock');
   const wait = (ms) => {
     const buf = new SharedArrayBuffer(4);
     Atomics.wait(new Int32Array(buf), 0, 0, ms);
   };
   let acquired = false;
-  for (let i = 0; i < 15 && !acquired; i++) {
+  for (let i = 0; i < retries && !acquired; i++) {
     try {
       if (fs.existsSync(lock)) {
         const age = Date.now() - fs.statSync(lock).mtimeMs;
@@ -197,17 +197,21 @@ export function withLock(repo, fn) {
       fs.writeFileSync(lock, String(process.pid), { flag: 'wx' });
       acquired = true;
     } catch {
-      wait(200);
+      wait(retryMs);
     }
   }
+  // Fail closed: running fn without the lock would let two writers
+  // interleave writes and commits. Callers surface this as an error.
+  if (!acquired)
+    throw new Error(
+      `could not acquire lock ${lock} after ${Math.round((retries * retryMs) / 1000)}s; another amr process may be writing — retry shortly`
+    );
   try {
     return fn();
   } finally {
-    if (acquired) {
-      try {
-        fs.unlinkSync(lock);
-      } catch {}
-    }
+    try {
+      fs.unlinkSync(lock);
+    } catch {}
   }
 }
 
