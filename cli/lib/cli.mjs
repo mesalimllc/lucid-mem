@@ -1,6 +1,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { ensureRepo, resolveProjectSlug } from './core.mjs';
 import {
   cmdAdd,
   cmdContext,
@@ -69,7 +70,7 @@ flags:
 // only in the `--project=name` form.
 const BOOL_FLAGS = new Set([
   'project', 'full', 'json', 'fix', 'compact', 'inline', 'spin',
-  'extract', 'no-log', 'allow-secret', 'if-stale-off',
+  'extract', 'no-log', 'allow-secret',
 ]);
 
 function parseFlags(argv) {
@@ -92,6 +93,27 @@ function parseFlags(argv) {
   return { flags, pos };
 }
 
+// `amr add "text" --project other` (space form): a bare --project never
+// consumes a value, so the name would silently join the entry text and
+// save to the current repo. If the word right after --project names an
+// existing project, treat it as the scope; if it merely looks like a name,
+// say so on stderr instead of mis-saving quietly.
+function spaceFormProject(rest, flags, pos) {
+  if (flags.project !== true || pos.length < 2) return;
+  const at = rest.indexOf('--project');
+  const word = at >= 0 ? rest[at + 1] : undefined;
+  if (!word || word.startsWith('--') || !pos.includes(word)) return;
+  const slug = resolveProjectSlug(ensureRepo(), word);
+  if (slug) {
+    flags.project = slug;
+    pos.splice(pos.indexOf(word), 1);
+  } else if (pos.length === 2 && /^[a-z0-9._-]+$/i.test(word))
+    process.stderr.write(
+      `note: "--project ${word}" does not name a known project, so "${word}" was kept in the entry text. Use --project=${word} to scope by name.
+`
+    );
+}
+
 // Subcommands invoked by host session hooks. AMR_HOOKS_OFF is set on
 // processes amr spawns itself (the coverage judge) so a judge session's
 // own hooks don't pay for context/sync/dream/coverage on the way in
@@ -102,6 +124,7 @@ const HOOK_CMDS = new Set(['context', 'sync', 'dream', 'coverage', 'reflect']);
 export function main(argv) {
   const [cmd, ...rest] = argv;
   const { flags, pos } = parseFlags(rest);
+  if (cmd === 'add' || cmd === 'update') spaceFormProject(rest, flags, pos);
   if (process.env.AMR_HOOKS_OFF && HOOK_CMDS.has(cmd)) return 0;
   try {
     switch (cmd) {

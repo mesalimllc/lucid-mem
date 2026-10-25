@@ -39,3 +39,21 @@ test('serve memory_context returns the digest as content text', () => {
   const resp = out.find((m) => m.id === 2);
   assert.ok(resp?.result?.content?.[0]?.text?.includes('mcp round-trip fact'));
 });
+
+test('serve memory_add takes kind/ttl and memory_update addresses entries by id', () => {
+  const home = tmpdir();
+  run(['ensure'], { amrHome: home });
+  const call = (id, name, args) => ({ jsonrpc: '2.0', id, method: 'tools/call', params: { name, arguments: args } });
+  const listed = rpc(home, [{ jsonrpc: '2.0', id: 1, method: 'tools/list', params: {} }]);
+  const add = listed.find((m) => m.id === 1).result.tools.find((t) => t.name === 'memory_add');
+  assert.ok(add.inputSchema.properties.kind.enum.includes('state'));
+  assert.ok(add.inputSchema.properties.ttl);
+  const added = rpc(home, [call(2, 'memory_add', { text: 'PR 9 is open', kind: 'state', ttl: 5 })]);
+  const text = added.find((m) => m.id === 2).result.content[0].text;
+  const id = text.match(/\[id ([0-9a-f]{4})\]/)?.[1];
+  assert.ok(id, text);
+  const upd = rpc(home, [call(3, 'memory_update', { id, text: 'PR 9 merged' })]);
+  assert.match(upd.find((m) => m.id === 3).result.content[0].text, new RegExp(`updated .*\[id ${id}\]`));
+  const none = rpc(home, [call(4, 'memory_update', { text: 'x y' })]);
+  assert.equal(none.find((m) => m.id === 4).result.isError, true);
+});

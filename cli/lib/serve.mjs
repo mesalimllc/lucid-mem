@@ -2,6 +2,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import readline from 'node:readline';
 import { fileURLToPath } from 'node:url';
+import { KINDS } from './core.mjs';
 import {
   cmdContext,
   cmdAdd,
@@ -76,6 +77,16 @@ const TOOLS = [
           type: 'string',
           description: 'Route to a topic file (e.g. "preferences").',
         },
+        kind: {
+          type: 'string',
+          enum: KINDS,
+          description:
+            'Entry type. Use "state" for session state (open PRs, what was just committed); it expires. Everything else is durable.',
+        },
+        ttl: {
+          type: 'integer',
+          description: 'Days until a "state" entry expires (default 2).',
+        },
         directory: { type: 'string' },
       },
       required: ['text'],
@@ -85,6 +96,8 @@ const TOOLS = [
         cmdAdd(a.text, {
           project: a.project ?? false,
           file: a.file,
+          kind: a.kind,
+          ttl: a.ttl,
           cwd: a.directory,
         })
       ),
@@ -102,16 +115,27 @@ const TOOLS = [
   {
     name: 'memory_update',
     description:
-      'Update an existing memory entry whose text matches `match`, instead of adding a contradicting one.',
+      'Update an existing memory entry instead of adding a contradicting one. Address it by `id` (the `id: xxxx` in its meta, shown in memory_context output).',
     inputSchema: {
       type: 'object',
       properties: {
-        match: { type: 'string' },
+        id: { type: 'string', description: 'Entry id, e.g. "a3f9"' },
+        match: {
+          type: 'string',
+          description: 'Deprecated: substring of the entry text. Prefer `id`.',
+        },
         text: { type: 'string', description: 'Replacement entry text' },
       },
-      required: ['match', 'text'],
+      required: ['text'],
     },
-    run: (a) => run(() => cmdUpdate(a.match, a.text, {})),
+    run: (a) => {
+      const key = a.id || a.match;
+      if (!key)
+        return run(() => {
+          throw new Error('memory_update needs an `id` (or deprecated `match`)');
+        });
+      return run(() => cmdUpdate(key, a.text, {}));
+    },
   },
 ];
 

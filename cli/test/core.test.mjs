@@ -183,3 +183,27 @@ test('ids backfills legacy entries and keeps ids unique', () => {
   assert.notEqual(found[0], found[1]);
   assert.match(run(['ids'], { amrHome }).stdout, /already have ids/);
 });
+
+test('add "text" --project <name>: a known project name is the scope, not entry text', () => {
+  const home = tmpdir();
+  const repoA = initRepo(tmpdir());
+  const repoB = initRepo(tmpdir());
+  assert.equal(run(['add', 'seed note', '--project'], { amrHome: home, cwd: repoB }).status, 0);
+  const slug = fs.readdirSync(path.join(home, 'projects'))[0].replace(/\.md$/, '');
+  const name = slug.replace(/-[0-9a-f]{6}$/, '');
+  const r = run(['add', 'scoped from elsewhere', '--project', name], { amrHome: home, cwd: repoA });
+  assert.equal(r.status, 0, r.stderr);
+  assert.equal(fs.readdirSync(path.join(home, 'projects')).length, 1);
+  const body = read(path.join(home, 'projects', `${slug}.md`));
+  assert.match(body, /scoped from elsewhere \[/);
+  assert.doesNotMatch(body, new RegExp(`scoped from elsewhere ${name}`));
+});
+
+test('add "text" --project <unknown>: warns instead of mis-saving silently', () => {
+  const home = tmpdir();
+  const repo = initRepo(tmpdir());
+  const r = run(['add', 'some entry', '--project', 'nosuchproj'], { amrHome: home, cwd: repo });
+  assert.equal(r.status, 0, r.stderr);
+  assert.match(r.stderr, /does not name a known project/);
+  assert.match(r.stderr, /--project=nosuchproj/);
+});
