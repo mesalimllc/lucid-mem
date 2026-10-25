@@ -202,7 +202,8 @@ const HOSTS = {
   'gemini-cli': {
     // Gemini CLI shares GEMINI.md with Antigravity but stores MCP servers
     // in settings.json using the standard mcpServers shape.
-    detect: () => fs.existsSync(path.join(home, '.gemini', 'settings.json')),
+    // The CLI creates ~/.gemini on install; settings.json may not exist yet.
+    detect: () => fs.existsSync(path.join(home, '.gemini')),
     mcpJson: () => path.join(home, '.gemini', 'settings.json'),
     rules: () => [
       {
@@ -303,6 +304,8 @@ function mergeMcpJson(file, entry = MCP_ENTRY) {
       return 'skipped (unparseable)';
     }
   }
+  if (!cfg || typeof cfg !== 'object' || Array.isArray(cfg))
+    return 'skipped (invalid settings root)';
   if (cfg.mcpServers?.['agent-memory']) return false;
   cfg.mcpServers = { ...(cfg.mcpServers || {}), 'agent-memory': entry };
   backup(file);

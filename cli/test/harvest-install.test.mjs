@@ -4,6 +4,13 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { run, tmpdir, read } from './helpers.mjs';
 
+// run() points APPDATA and XDG_CONFIG_HOME inside fakeHome, so the CLI
+// resolves Zed's config dir there on every platform.
+const zedDirIn = (fakeHome) =>
+  process.platform === 'win32'
+    ? path.join(fakeHome, 'AppData', 'Roaming', 'Zed')
+    : path.join(fakeHome, '.config', 'zed');
+
 test('harvest --extract pulls user messages from transcript fixtures', () => {
   const home = tmpdir();
   run(['ensure'], { amrHome: home });
@@ -194,7 +201,7 @@ test('install --host zed wires context_servers + personal AGENTS.md, idempotent 
   const home = tmpdir();
   const fakeHome = tmpdir();
   run(['ensure'], { amrHome: home });
-  const zedDir = path.join(fakeHome, 'AppData', 'Roaming', 'Zed');
+  const zedDir = zedDirIn(fakeHome);
   fs.mkdirSync(zedDir, { recursive: true });
   const settingsFile = path.join(zedDir, 'settings.json');
   fs.writeFileSync(settingsFile, JSON.stringify({ theme: 'One Dark' }));
@@ -224,7 +231,7 @@ test('install --host zed leaves JSONC settings untouched and reports skipped MCP
   const home = tmpdir();
   const fakeHome = tmpdir();
   run(['ensure'], { amrHome: home });
-  const zedDir = path.join(fakeHome, 'AppData', 'Roaming', 'Zed');
+  const zedDir = zedDirIn(fakeHome);
   fs.mkdirSync(zedDir, { recursive: true });
   const settingsFile = path.join(zedDir, 'settings.json');
   const original = '{\n  // user comment\n  "theme": "One Dark"\n}\n';
@@ -235,4 +242,20 @@ test('install --host zed leaves JSONC settings untouched and reports skipped MCP
   assert.match(r.stdout, /mcp skipped \(unparseable\)/);
   assert.equal(read(settingsFile), original);
   assert.match(read(path.join(zedDir, 'AGENTS.md')), /agent-memory-repo/);
+});
+
+test('install --host gemini-cli leaves commented settings untouched and reports skipped MCP', () => {
+  const home = tmpdir();
+  const fakeHome = tmpdir();
+  run(['ensure'], { amrHome: home });
+  const geminiDir = path.join(fakeHome, '.gemini');
+  fs.mkdirSync(geminiDir, { recursive: true });
+  const settingsFile = path.join(geminiDir, 'settings.json');
+  const original = '{\n  // user comment\n  "theme": "Dracula"\n}\n';
+  fs.writeFileSync(settingsFile, original);
+
+  const r = run(['install', '--host', 'gemini-cli'], { amrHome: home, fakeHome });
+  assert.equal(r.status, 0, r.stderr);
+  assert.match(r.stdout, /mcp skipped \(unparseable\)/);
+  assert.equal(read(settingsFile), original);
 });
