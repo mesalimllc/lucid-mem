@@ -2,6 +2,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { addJsoncEntry, removeJsoncEntry, ShapeError } from './jsonc.mjs';
 import { ensureRepo, git, hasRemote, isMemoryRepo, loadConfig, resolveHome, resolveProjectSlug, sh } from './core.mjs';
 
 const out = (s = '') => process.stdout.write(s + '\n');
@@ -289,29 +290,40 @@ const HOSTS = {
 
 const MCP_ENTRY = { command: 'node', args: [CLI_ENTRY, 'serve'] };
 
-// Never clobber an unparseable config: rewriting it as {} plus our entry
-// would drop every other MCP server the app relies on. Same contract as
-// mergeMcpOpencode; cmdInstall counts the skip as a host failure.
-function mergeMcpJson(file, entry = MCP_ENTRY) {
-  let cfg = {};
-  if (fs.existsSync(file)) {
-    const text = fs.readFileSync(file, 'utf8');
-    try {
-      cfg = JSON.parse(text);
-    } catch {
-      // Unparseable means the host cannot load its config: report a failure
-      // even when our entry is already there.
-      return 'skipped (unparseable)';
-    }
+// JSONC-aware merge: comments in a host config are kept, and a file that
+// cannot be parsed at all is left untouched — rewriting it as {} plus our
+// entry would drop every other MCP server the app relies on. cmdInstall
+// counts an 'unparseable' skip as a host failure.
+function mergeJsoncEntry(file, section, name, entry) {
+  const text = fs.existsSync(file) ? fs.readFileSync(file, 'utf8') : '';
+  let next;
+  try {
+    next = addJsoncEntry(text, section, name, entry);
+  } catch (e) {
+    return e instanceof ShapeError ? `skipped (${e.message})` : 'skipped (unparseable)';
   }
-  if (!cfg || typeof cfg !== 'object' || Array.isArray(cfg))
-    return 'skipped (invalid settings root)';
-  if (cfg.mcpServers?.['agent-memory']) return false;
-  cfg.mcpServers = { ...(cfg.mcpServers || {}), 'agent-memory': entry };
+  if (next === null) return false;
   backup(file);
   fs.mkdirSync(path.dirname(file), { recursive: true });
-  fs.writeFileSync(file, JSON.stringify(cfg, null, 2) + '\n');
+  fs.writeFileSync(file, next);
   return true;
+}
+function unmergeJsoncEntry(file, section, name) {
+  if (!fs.existsSync(file)) return false;
+  let next;
+  try {
+    next = removeJsoncEntry(fs.readFileSync(file, 'utf8'), section, name);
+  } catch {
+    return false;
+  }
+  if (next === null) return false;
+  backup(file);
+  fs.writeFileSync(file, next);
+  return true;
+}
+
+function mergeMcpJson(file, entry = MCP_ENTRY) {
+  return mergeJsoncEntry(file, 'mcpServers', 'agent-memory', entry);
 }
 
 function mergeMcpToml(file) {
@@ -330,60 +342,21 @@ function mergeMcpToml(file) {
 // a different schema from mcpServers. .jsonc files may contain comments
 // that break JSON.parse; never clobber an unparseable config.
 function mergeMcpOpencode(file) {
-  let cfg = {};
-  if (fs.existsSync(file)) {
-    const text = fs.readFileSync(file, 'utf8');
-    try {
-      cfg = JSON.parse(text);
-    } catch {
-      // .jsonc or otherwise unparseable: skip without clobbering, and let
-      // cmdInstall count it as a host failure.
-      return 'skipped (unparseable)';
-    }
-  }
-  if (cfg.mcp?.['agent-memory']) return false;
-  cfg.mcp = {
-    ...(cfg.mcp || {}),
-    'agent-memory': {
-      type: 'local',
-      command: ['node', CLI_ENTRY, 'serve'],
-      disabled: false,
-    },
-  };
-  backup(file);
-  fs.mkdirSync(path.dirname(file), { recursive: true });
-  fs.writeFileSync(file, JSON.stringify(cfg, null, 2) + '\n');
-  return true;
+  return mergeJsoncEntry(file, 'mcp', 'agent-memory', {
+    type: 'local',
+    command: ['node', CLI_ENTRY, 'serve'],
+    disabled: false,
+  });
 }
 
 // Zed stores context servers in `context_servers` and permits JSONC
 // comments in settings.json. Keep an unparseable file untouched.
 function mergeMcpZed(file) {
-  let cfg = {};
-  if (fs.existsSync(file)) {
-    const text = fs.readFileSync(file, 'utf8');
-    try {
-      cfg = JSON.parse(text);
-    } catch {
-      return 'skipped (unparseable)';
-    }
-  }
-  if (!cfg || typeof cfg !== 'object' || Array.isArray(cfg))
-    return 'skipped (invalid settings root)';
-  if (cfg.context_servers?.['agent-memory']) return false;
-  if (
-    cfg.context_servers != null &&
-    (typeof cfg.context_servers !== 'object' || Array.isArray(cfg.context_servers))
-  )
-    return 'skipped (invalid context_servers)';
-  cfg.context_servers = {
-    ...(cfg.context_servers || {}),
-    'agent-memory': { command: 'node', args: [CLI_ENTRY, 'serve'], env: {} },
-  };
-  backup(file);
-  fs.mkdirSync(path.dirname(file), { recursive: true });
-  fs.writeFileSync(file, JSON.stringify(cfg, null, 2) + '\n');
-  return true;
+  return mergeJsoncEntry(file, 'context_servers', 'agent-memory', {
+    command: 'node',
+    args: [CLI_ENTRY, 'serve'],
+    env: {},
+  });
 }
 
 function backup(file) {
@@ -705,19 +678,7 @@ function unmergeClaudeSettings(file) {
 }
 
 function unmergeMcpJson(file) {
-  if (!fs.existsSync(file)) return false;
-  let cfg;
-  try {
-    cfg = JSON.parse(fs.readFileSync(file, 'utf8'));
-  } catch {
-    return false;
-  }
-  if (!cfg.mcpServers?.['agent-memory']) return false;
-  delete cfg.mcpServers['agent-memory'];
-  if (!Object.keys(cfg.mcpServers).length) delete cfg.mcpServers;
-  backup(file);
-  fs.writeFileSync(file, JSON.stringify(cfg, null, 2) + '\n');
-  return true;
+  return unmergeJsoncEntry(file, 'mcpServers', 'agent-memory');
 }
 
 function unmergeMcpToml(file) {
@@ -734,36 +695,11 @@ function unmergeMcpToml(file) {
 }
 
 function unmergeMcpOpencode(file) {
-  if (!fs.existsSync(file)) return false;
-  const text = fs.readFileSync(file, 'utf8');
-  let cfg;
-  try {
-    cfg = JSON.parse(text);
-  } catch {
-    return false; // .jsonc we never managed to write anyway
-  }
-  if (!cfg.mcp?.['agent-memory']) return false;
-  delete cfg.mcp['agent-memory'];
-  if (!Object.keys(cfg.mcp).length) delete cfg.mcp;
-  backup(file);
-  fs.writeFileSync(file, JSON.stringify(cfg, null, 2) + '\n');
-  return true;
+  return unmergeJsoncEntry(file, 'mcp', 'agent-memory');
 }
 
 function unmergeMcpZed(file) {
-  if (!fs.existsSync(file)) return false;
-  let cfg;
-  try {
-    cfg = JSON.parse(fs.readFileSync(file, 'utf8'));
-  } catch {
-    return false;
-  }
-  if (!cfg.context_servers?.['agent-memory']) return false;
-  delete cfg.context_servers['agent-memory'];
-  if (!Object.keys(cfg.context_servers).length) delete cfg.context_servers;
-  backup(file);
-  fs.writeFileSync(file, JSON.stringify(cfg, null, 2) + '\n');
-  return true;
+  return unmergeJsoncEntry(file, 'context_servers', 'agent-memory');
 }
 
 function unstampRules(file) {

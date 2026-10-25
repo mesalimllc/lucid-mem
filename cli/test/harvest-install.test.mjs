@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import path from 'node:path';
 import { run, tmpdir, read } from './helpers.mjs';
+import { readJsonc } from '../lib/jsonc.mjs';
 
 // run() points APPDATA and XDG_CONFIG_HOME inside fakeHome, so the CLI
 // resolves Zed's config dir there on every platform.
@@ -181,7 +182,7 @@ test('install --host gemini-cli wires MCP and shared GEMINI.md; uninstall preser
   assert.equal(settings.mcpServers['agent-memory'].command, 'node');
   assert.deepEqual(settings.mcpServers['agent-memory'].args.slice(-1), ['serve']);
   const rulesFile = path.join(geminiDir, 'GEMINI.md');
-  assert.match(read(rulesFile), /agent-memory-repo/);
+  assert.match(read(rulesFile), /lucid-mem/);
 
   const r2 = run(['install', '--host', 'gemini-cli'], { amrHome: home, fakeHome });
   assert.equal(r2.status, 0, r2.stderr);
@@ -193,7 +194,7 @@ test('install --host gemini-cli wires MCP and shared GEMINI.md; uninstall preser
   const removed = run(['uninstall', '--host', 'gemini-cli'], { amrHome: home, fakeHome });
   assert.equal(removed.status, 0, removed.stderr);
   assert.match(removed.stdout, /rules retained \(also used by antigravity\)/);
-  assert.match(read(rulesFile), /agent-memory-repo/);
+  assert.match(read(rulesFile), /lucid-mem/);
   assert.ok(!JSON.parse(read(settingsFile)).mcpServers?.['agent-memory']);
 });
 
@@ -213,7 +214,7 @@ test('install --host zed wires context_servers + personal AGENTS.md, idempotent 
   assert.equal(settings.context_servers['agent-memory'].command, 'node');
   assert.deepEqual(settings.context_servers['agent-memory'].args.slice(-1), ['serve']);
   const agentsFile = path.join(zedDir, 'AGENTS.md');
-  assert.match(read(agentsFile), /agent-memory-repo/);
+  assert.match(read(agentsFile), /lucid-mem/);
 
   const r2 = run(['install', '--host', 'zed'], { amrHome: home, fakeHome });
   assert.equal(r2.status, 0, r2.stderr);
@@ -227,35 +228,60 @@ test('install --host zed wires context_servers + personal AGENTS.md, idempotent 
   assert.ok(!fs.existsSync(agentsFile));
 });
 
-test('install --host zed leaves JSONC settings untouched and reports skipped MCP', () => {
+test('install --host zed wires JSONC settings and keeps the comments', () => {
   const home = tmpdir();
   const fakeHome = tmpdir();
   run(['ensure'], { amrHome: home });
   const zedDir = zedDirIn(fakeHome);
   fs.mkdirSync(zedDir, { recursive: true });
   const settingsFile = path.join(zedDir, 'settings.json');
-  const original = '{\n  // user comment\n  "theme": "One Dark"\n}\n';
-  fs.writeFileSync(settingsFile, original);
+  fs.writeFileSync(settingsFile, '{\n  // user comment\n  "theme": "One Dark"\n}\n');
 
   const r = run(['install', '--host', 'zed'], { amrHome: home, fakeHome });
   assert.equal(r.status, 0, r.stderr);
-  assert.match(r.stdout, /mcp skipped \(unparseable\)/);
-  assert.equal(read(settingsFile), original);
-  assert.match(read(path.join(zedDir, 'AGENTS.md')), /agent-memory-repo/);
+  assert.match(r.stdout, /mcp \+agent-memory/);
+  const text = read(settingsFile);
+  assert.match(text, /\/\/ user comment/);
+  assert.equal(readJsonc(text).members.find((m) => m.key === 'context_servers').value.members[0].key, 'agent-memory');
+  const removed = run(['uninstall', '--host', 'zed'], { amrHome: home, fakeHome });
+  assert.equal(removed.status, 0, removed.stderr);
+  const after = read(settingsFile);
+  assert.match(after, /\/\/ user comment/);
+  assert.deepEqual(readJsonc(after).members.map((m) => m.key), ['theme']);
+  assert.ok(!fs.existsSync(path.join(zedDir, 'AGENTS.md')));
 });
 
-test('install --host gemini-cli leaves commented settings untouched and reports skipped MCP', () => {
+test('install --host zed leaves unparseable settings untouched and reports skipped MCP', () => {
+  const home = tmpdir();
+  const fakeHome = tmpdir();
+  run(['ensure'], { amrHome: home });
+  const zedDir = zedDirIn(fakeHome);
+  fs.mkdirSync(zedDir, { recursive: true });
+  const settingsFile = path.join(zedDir, 'settings.json');
+  const original = '{\n  // user comment\n  "theme": "One Dark"\n';
+  fs.writeFileSync(settingsFile, original);
+
+  const r = run(['install', '--host', 'zed'], { amrHome: home, fakeHome });
+  // An unparseable host config is a failed install, not a quiet skip.
+  assert.equal(r.status, 1, r.stderr);
+  assert.match(r.stderr, /install incomplete for: zed/);
+  assert.match(r.stdout, /mcp skipped \(unparseable\)/);
+  assert.equal(read(settingsFile), original);
+  assert.match(read(path.join(zedDir, 'AGENTS.md')), /lucid-mem/);
+});
+
+test('install --host gemini-cli wires commented settings and keeps the comments', () => {
   const home = tmpdir();
   const fakeHome = tmpdir();
   run(['ensure'], { amrHome: home });
   const geminiDir = path.join(fakeHome, '.gemini');
   fs.mkdirSync(geminiDir, { recursive: true });
   const settingsFile = path.join(geminiDir, 'settings.json');
-  const original = '{\n  // user comment\n  "theme": "Dracula"\n}\n';
-  fs.writeFileSync(settingsFile, original);
+  fs.writeFileSync(settingsFile, '{\n  // user comment\n  "theme": "Dracula"\n}\n');
 
   const r = run(['install', '--host', 'gemini-cli'], { amrHome: home, fakeHome });
   assert.equal(r.status, 0, r.stderr);
-  assert.match(r.stdout, /mcp skipped \(unparseable\)/);
-  assert.equal(read(settingsFile), original);
+  const text = read(settingsFile);
+  assert.match(text, /\/\/ user comment/);
+  assert.equal(readJsonc(text).members.find((m) => m.key === 'mcpServers').value.members[0].key, 'agent-memory');
 });
