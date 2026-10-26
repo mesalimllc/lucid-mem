@@ -125,7 +125,7 @@ amr sync
 | Copilot CLI | `~/.copilot/AGENTS.md` | - | - |
 | Codex | `~/.codex/AGENTS.md` | - | `config.toml` |
 | Cline | `~/Documents/Cline/Rules/`, `~/.cline/AGENTS.md` | - | `~/.cline/mcp.json` |
-| Muse | `SOUL.md` | - | - |
+| Muse | `~/.config/muse/AGENTS.md` | `SessionStart` context, `PostToolUse`/`PostToolUseFailure` recall, `Stop` reflect, `SessionEnd` sync/dream/coverage in `settings.json` | `settings.json` (`mcpServers`) |
 | Hermes Agent | `SOUL.md` (`$HERMES_HOME`) | shell hooks in `config.yaml`: `pre_llm_call` inject, `post_compaction` re-arm | `config.yaml` (`mcp_servers`) |
 | Claude Desktop | - | - | `claude_desktop_config.json` |
 | Antigravity | `~/.gemini/GEMINI.md` | - | `mcp_config.json` |

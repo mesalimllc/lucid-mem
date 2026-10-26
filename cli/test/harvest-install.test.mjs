@@ -148,6 +148,67 @@ test('install --host hermes fails closed when a conflicting shell hook already e
   assert.equal((after.match(/pre_llm_call:/g) || []).length, 1);
 });
 
+test('install --host muse wires AGENTS.md rules, hooks and MCP into muse settings; uninstall removes them', () => {
+  const home = tmpdir();
+  const fakeHome = tmpdir();
+  run(['ensure'], { amrHome: home });
+  const museDir = path.join(fakeHome, '.config', 'muse');
+  fs.mkdirSync(museDir, { recursive: true });
+  const settings = path.join(museDir, 'settings.json');
+  fs.writeFileSync(settings, JSON.stringify({ schema_version: 1, model: 'muse-spark-1.3' }));
+  const r = run(['install', '--host', 'muse'], { amrHome: home, fakeHome });
+  assert.equal(r.status, 0, r.stderr);
+  const cfg = JSON.parse(read(settings));
+  assert.equal(cfg.model, 'muse-spark-1.3');
+  assert.equal(cfg.schema_version, 1);
+  const hookCmds = (ev) => (cfg.hooks?.[ev] || []).flatMap((e) => (e.hooks || []).map((h) => h.command));
+  assert.ok(hookCmds('SessionStart').some((c) => c.includes('context --hook')));
+  assert.ok(hookCmds('PostToolUseFailure').some((c) => c.includes('recall --hook')));
+  assert.ok(hookCmds('Stop').some((c) => c.includes('reflect')));
+  assert.equal(cfg.mcpServers['agent-memory'].type, 'stdio');
+  assert.equal(cfg.mcpServers['agent-memory'].mode, 'optional');
+  assert.ok(cfg.mcpServers['agent-memory'].args.some((a) => a.endsWith('amr.mjs')));
+  assert.match(read(path.join(museDir, 'AGENTS.md')), /<!-- lucid-mem -->/);
+  const r2 = run(['install', '--host', 'muse'], { amrHome: home, fakeHome });
+  assert.equal(r2.status, 0, r2.stderr);
+  assert.equal(JSON.stringify(JSON.parse(read(settings)).mcpServers).match(/agent-memory/g).length, 1);
+  const u = run(['uninstall', '--host', 'muse'], { amrHome: home, fakeHome });
+  assert.equal(u.status, 0, u.stderr);
+  const after = JSON.parse(read(settings));
+  assert.equal(after.model, 'muse-spark-1.3');
+  assert.ok(!JSON.stringify(after).includes('agent-memory'));
+  assert.ok(!JSON.stringify(after.hooks || {}).includes('amr.mjs'));
+  assert.ok(!(read(path.join(museDir, 'AGENTS.md')) || '').includes('lucid-mem'));
+});
+
+test('install --host muse creates settings.json with schema_version when missing', () => {
+  const home = tmpdir();
+  const fakeHome = tmpdir();
+  run(['ensure'], { amrHome: home });
+  const museDir = path.join(fakeHome, '.config', 'muse');
+  fs.mkdirSync(museDir, { recursive: true });
+  const r = run(['install', '--host', 'muse'], { amrHome: home, fakeHome });
+  assert.equal(r.status, 0, r.stderr);
+  const cfg = JSON.parse(read(path.join(museDir, 'settings.json')));
+  assert.equal(cfg.schema_version, 1);
+  assert.ok(cfg.mcpServers['agent-memory']);
+});
+
+test('install --host muse fails closed when settings.json has both MCP maps', () => {
+  const home = tmpdir();
+  const fakeHome = tmpdir();
+  run(['ensure'], { amrHome: home });
+  const museDir = path.join(fakeHome, '.config', 'muse');
+  fs.mkdirSync(museDir, { recursive: true });
+  const settings = path.join(museDir, 'settings.json');
+  const before = JSON.stringify({ schema_version: 1, mcpServers: {}, mcp_servers: {} });
+  fs.writeFileSync(settings, before);
+  const r = run(['install', '--host', 'muse'], { amrHome: home, fakeHome });
+  assert.notEqual(r.status, 0);
+  assert.match(r.stdout + r.stderr, /skipped/);
+  assert.equal(read(settings), before);
+});
+
 test('install --host codex writes rules + mcp into a fake home, idempotent', () => {
   const home = tmpdir();
   const fakeHome = tmpdir();

@@ -62,6 +62,9 @@ const hermesHome = () =>
     : process.platform === 'win32'
       ? path.join(localappdata, 'hermes')
       : path.join(home, '.hermes');
+// Meta Muse Code config root: XDG with a home fallback on every OS
+// (Windows uses %USERPROFILE%\.config\muse, never AppData).
+const museConfigDir = () => path.join(xdgConfigHome, 'muse');
 
 const HOSTS = {
   cursor: {
@@ -177,12 +180,17 @@ const HOSTS = {
     ],
   },
   muse: {
-    // Meta's muse-code CLI; hermes is its local runtime dir and SOUL.md
-    // is its global instructions file. `muse exec` is headless-capable.
-    detect: () => fs.existsSync(path.join(localappdata, 'hermes')),
+    // Meta Muse Code CLI (`muse`). User settings at
+    // ~/.config/muse/settings.json hold hooks (Claude-shaped payloads,
+    // SessionStart stdout/additionalContext injection) and MCP servers;
+    // schema_version: 1 is mandatory there. User rules at
+    // ~/.config/muse/AGENTS.md load for every project. Hooks run with
+    // a cleared environment, so commands use absolute paths.
+    detect: () => fs.existsSync(museConfigDir()),
+    museSettings: () => path.join(museConfigDir(), 'settings.json'),
     rules: () => [
       {
-        path: path.join(localappdata, 'hermes', 'SOUL.md'),
+        path: path.join(museConfigDir(), 'AGENTS.md'),
         content: RULE_BLOCK,
         append: true,
       },
@@ -526,15 +534,7 @@ function mergeHooksJson(file, entries) {
   return added;
 }
 
-function mergeClaudeSettings(file, entries) {
-  let cfg = {};
-  if (fs.existsSync(file)) {
-    try {
-      cfg = JSON.parse(fs.readFileSync(file, 'utf8'));
-    } catch {
-      throw new Error(`cannot parse ${file}; leaving it untouched`);
-    }
-  }
+function mergeHooksIntoCfg(cfg, entries) {
   cfg.hooks ||= {};
   const added = [];
   for (const [event, sub, matcher] of entries) {
@@ -564,11 +564,125 @@ function mergeClaudeSettings(file, entries) {
       added.push(`${event}:${sub}`);
     }
   }
+  return added;
+}
+
+function mergeClaudeSettings(file, entries) {
+  let cfg = {};
+  if (fs.existsSync(file)) {
+    try {
+      cfg = JSON.parse(fs.readFileSync(file, 'utf8'));
+    } catch {
+      throw new Error(`cannot parse ${file}; leaving it untouched`);
+    }
+  }
+  const added = mergeHooksIntoCfg(cfg, entries);
   if (added.length) {
     backup(file);
     fs.writeFileSync(file, JSON.stringify(cfg, null, 2) + '\n');
   }
   return added;
+}
+
+// Muse Code's settings.json also carries MCP servers. Muse reads
+// `mcpServers` ("type": "stdio") or the legacy `mcp_servers`
+// ("transport": "stdio"), and ignores every server when both maps are
+// present, so that state fails closed. `mode: "optional"` matters:
+// Muse's default "required" aborts the whole run when a server
+// cannot start. schema_version: 1 is added only when missing; Muse
+// refuses to start without it.
+const MUSE_HOOK_ENTRIES = [
+  ...HOOK_ENTRIES.map(([e, s]) => [
+    e[0].toUpperCase() + e.slice(1),
+    e === 'sessionStart' ? 'context --hook' : s,
+  ]),
+  // Muse fires PostToolUseFailure instead of PostToolUse when a tool
+  // fails; recall is silent unless the output matches a known pitfall.
+  // No matcher: Muse's tool names are lowercase (bash, read_file...).
+  ['PostToolUse', 'recall --hook'],
+  ['PostToolUseFailure', 'recall --hook'],
+  ['Stop', 'reflect'],
+];
+
+function mergeMuseSettings(file) {
+  let cfg = {};
+  if (fs.existsSync(file)) {
+    try {
+      cfg = JSON.parse(fs.readFileSync(file, 'utf8'));
+    } catch {
+      throw new Error(`cannot parse ${file}; leaving it untouched`);
+    }
+  }
+  if (cfg.mcpServers && cfg.mcp_servers)
+    return {
+      hooks: [],
+      mcp: 'skipped (settings.json has both mcpServers and mcp_servers; Muse ignores every MCP server in that state - delete one map and re-run)',
+    };
+  let changed = false;
+  if (cfg.schema_version === undefined) {
+    cfg.schema_version = 1;
+    changed = true;
+  }
+  const added = mergeHooksIntoCfg(cfg, MUSE_HOOK_ENTRIES);
+  if (added.length) changed = true;
+  const legacy = !!cfg.mcp_servers;
+  const key = legacy ? 'mcp_servers' : 'mcpServers';
+  cfg[key] ||= {};
+  let mcp = false;
+  if (!cfg[key]['agent-memory']) {
+    cfg[key]['agent-memory'] = legacy
+      ? { transport: 'stdio', command: 'node', args: [CLI_ENTRY, 'serve'], mode: 'optional' }
+      : { type: 'stdio', command: 'node', args: [CLI_ENTRY, 'serve'], mode: 'optional' };
+    mcp = true;
+    changed = true;
+  }
+  if (changed) {
+    backup(file);
+    fs.mkdirSync(path.dirname(file), { recursive: true });
+    fs.writeFileSync(file, JSON.stringify(cfg, null, 2) + '\n');
+  }
+  return { hooks: added, mcp };
+}
+
+function unmergeHooksFromCfg(cfg) {
+  if (!cfg.hooks) return false;
+  let changed = false;
+  for (const [ev, list] of Object.entries(cfg.hooks)) {
+    const kept = list
+      .map((e) => ({
+        ...e,
+        hooks: (e?.hooks || []).filter((h) => !isAmrCmd(h?.command)),
+      }))
+      .filter((e) => (e.hooks || []).length || !Array.isArray(e?.hooks));
+    if (JSON.stringify(kept) !== JSON.stringify(list)) changed = true;
+    if (kept.length) cfg.hooks[ev] = kept;
+    else delete cfg.hooks[ev];
+  }
+  if (!Object.keys(cfg.hooks).length) delete cfg.hooks;
+  return changed;
+}
+
+function unmergeMuseSettings(file) {
+  if (!fs.existsSync(file)) return false;
+  let cfg;
+  try {
+    cfg = JSON.parse(fs.readFileSync(file, 'utf8'));
+  } catch {
+    return false;
+  }
+  let changed = unmergeHooksFromCfg(cfg);
+  for (const key of ['mcpServers', 'mcp_servers']) {
+    if (cfg[key]?.['agent-memory']) {
+      delete cfg[key]['agent-memory'];
+      if (!Object.keys(cfg[key]).length) delete cfg[key];
+      changed = true;
+    }
+  }
+  if (changed) {
+    backup(file);
+    fs.writeFileSync(file, JSON.stringify(cfg, null, 2) + '\n');
+  }
+  return changed;
 }
 
 function stampBlock(file, content, { append }) {
@@ -721,6 +835,22 @@ export function cmdInstall(flags) {
             : `mcp ${res}: ${file}`
         );
       }
+      if (h.museSettings) {
+        const file = h.museSettings();
+        const res = mergeMuseSettings(file);
+        did.push(
+          res.hooks.length
+            ? `hooks +${res.hooks.join(',')} in ${file}`
+            : `hooks already wired in ${file}`
+        );
+        did.push(
+          res.mcp === true
+            ? `mcp +agent-memory in ${file}`
+            : res.mcp === false
+            ? `mcp already wired in ${file}`
+            : `mcp ${res.mcp}: ${file}`
+        );
+      }
       if (h.configYaml) {
         const file = h.configYaml();
         const m = mergeMcpYaml(file);
@@ -794,20 +924,7 @@ function unmergeClaudeSettings(file) {
   } catch {
     return false;
   }
-  if (!cfg.hooks) return false;
-  let changed = false;
-  for (const [ev, list] of Object.entries(cfg.hooks)) {
-    const kept = list
-      .map((e) => ({
-        ...e,
-        hooks: (e?.hooks || []).filter((h) => !isAmrCmd(h?.command)),
-      }))
-      .filter((e) => (e.hooks || []).length || !Array.isArray(e?.hooks));
-    if (JSON.stringify(kept) !== JSON.stringify(list)) changed = true;
-    if (kept.length) cfg.hooks[ev] = kept;
-    else delete cfg.hooks[ev];
-  }
-  if (!Object.keys(cfg.hooks).length) delete cfg.hooks;
+  const changed = unmergeHooksFromCfg(cfg);
   if (changed) {
     backup(file);
     fs.writeFileSync(file, JSON.stringify(cfg, null, 2) + '\n');
@@ -909,6 +1026,8 @@ export function cmdUninstall(flags) {
         did.push(`mcp entry removed from ${h.mcpOpencode()}`);
       if (h.mcpZed && unmergeMcpZed(h.mcpZed()))
         did.push(`mcp entry removed from ${h.mcpZed()}`);
+      if (h.museSettings && unmergeMuseSettings(h.museSettings()))
+        did.push(`hooks+mcp removed from ${h.museSettings()}`);
       if (h.configYaml) {
         if (unmergeMcpYaml(h.configYaml()))
           did.push(`mcp entry removed from ${h.configYaml()}`);
@@ -931,11 +1050,13 @@ function hostWired(name) {
   try {
     if (h.hooksJson && has(h.hooksJson(), 'amr')) return 'wired';
     if (h.settingsJson && has(h.settingsJson(), 'amr')) return 'wired';
+    if (h.museSettings && has(h.museSettings(), 'amr')) return 'wired';
     const mcp =
       (h.mcpJson && has(h.mcpJson(), 'agent-memory')) ||
       (h.mcpToml && has(h.mcpToml(), 'agent-memory')) ||
       (h.mcpOpencode && has(h.mcpOpencode(), 'agent-memory')) ||
       (h.configYaml && has(h.configYaml(), 'agent-memory')) ||
+      (h.museSettings && has(h.museSettings(), 'agent-memory')) ||
       (h.mcpZed && has(h.mcpZed(), 'agent-memory'));
     if (h.rules && h.rules().some((r) => has(r.path, MARK_BEGIN) || has(r.path, LEGACY_MARK_BEGIN)))
       return mcp ? 'wired (rules+mcp)' : 'wired (rules only)';

@@ -45,9 +45,14 @@ const SOURCES = [
   },
   {
     host: 'muse',
+    // Muse Code's data root (XDG_DATA_HOME or ~/.local/share).
+    // Before this, the host pointed at Hermes Agent's session dumps.
     roots: [
-      path.join(localappdata, 'hermes', 'sessions'),
-      path.join(localappdata, 'hermes', 'terminal-sessions'),
+      path.join(
+        process.env.XDG_DATA_HOME || path.join(home, '.local', 'share'),
+        'muse',
+        'sessions'
+      ),
     ],
     ext: ['.jsonl', '.json', '.md', ''],
   },
