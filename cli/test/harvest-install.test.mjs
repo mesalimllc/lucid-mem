@@ -99,6 +99,55 @@ test('install --host claude wires Stop→reflect alongside session hooks', () =>
   assert.ok(stops.some((c) => c.includes('amr.mjs" reflect')));
 });
 
+test('install --host hermes wires SOUL.md rules, MCP and shell hooks; uninstall removes them', () => {
+  const home = tmpdir();
+  const fakeHome = tmpdir();
+  run(['ensure'], { amrHome: home });
+  const hermesDir = path.join(fakeHome, 'hermes-home');
+  fs.mkdirSync(hermesDir, { recursive: true });
+  fs.writeFileSync(path.join(hermesDir, 'config.yaml'), 'model:\n  default: test-model\n');
+  const env = { HERMES_HOME: hermesDir };
+  const r = run(['install', '--host', 'hermes'], { amrHome: home, fakeHome, env });
+  assert.equal(r.status, 0, r.stderr);
+  const cfg = read(path.join(hermesDir, 'config.yaml'));
+  assert.match(cfg, /mcp_servers:\n  agent-memory:\n    command: "node"\n    args: \[".*amr\.mjs", "serve"\]/);
+  assert.match(cfg, /hooks:\n  pre_llm_call:\n    - command: ".*context --hermes"/);
+  assert.match(cfg, /post_compaction:/);
+  assert.match(cfg, /default: test-model/);
+  assert.match(read(path.join(hermesDir, 'SOUL.md')), /<!-- lucid-mem -->/);
+  const r2 = run(['install', '--host', 'hermes'], { amrHome: home, fakeHome, env });
+  assert.equal(r2.status, 0, r2.stderr);
+  assert.equal((read(path.join(hermesDir, 'config.yaml')).match(/agent-memory:/g) || []).length, 1);
+  const u = run(['uninstall', '--host', 'hermes'], { amrHome: home, fakeHome, env });
+  assert.equal(u.status, 0, u.stderr);
+  const after = read(path.join(hermesDir, 'config.yaml'));
+  assert.ok(!after.includes('agent-memory'));
+  assert.ok(!after.includes('context --hermes'));
+  assert.match(after, /default: test-model/);
+  assert.ok(!(read(path.join(hermesDir, 'SOUL.md')) || '').includes('lucid-mem'));
+});
+
+test('install --host hermes fails closed when a conflicting shell hook already exists', () => {
+  const home = tmpdir();
+  const fakeHome = tmpdir();
+  run(['ensure'], { amrHome: home });
+  const hermesDir = path.join(fakeHome, 'hermes-home');
+  fs.mkdirSync(hermesDir, { recursive: true });
+  const before = 'hooks:\n  pre_llm_call:\n    - command: "echo mine"\n';
+  fs.writeFileSync(path.join(hermesDir, 'config.yaml'), before);
+  const r = run(['install', '--host', 'hermes'], {
+    amrHome: home,
+    fakeHome,
+    env: { HERMES_HOME: hermesDir },
+  });
+  assert.notEqual(r.status, 0);
+  assert.match(r.stdout + r.stderr, /skipped/);
+  // the user's hook is untouched and no duplicate pre_llm_call key appeared
+  const after = read(path.join(hermesDir, 'config.yaml'));
+  assert.match(after, /echo mine/);
+  assert.equal((after.match(/pre_llm_call:/g) || []).length, 1);
+});
+
 test('install --host codex writes rules + mcp into a fake home, idempotent', () => {
   const home = tmpdir();
   const fakeHome = tmpdir();

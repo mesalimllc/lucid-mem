@@ -197,6 +197,23 @@ test('context --hook: a compaction re-injection with nothing new is suppressed; 
   assert.ok(!compact2.stdout.includes('first durable fact'));
 });
 
+test('context --hermes: pre_llm_call injects once per session, post_compaction re-arms it', () => {
+  const home = tmpdir();
+  run(['ensure'], { amrHome: home });
+  run(['add', 'hermes durable fact'], { amrHome: home });
+  const payload = (hook_event_name) =>
+    JSON.stringify({ hook_event_name, session_id: 'hsess-1', cwd: tmpdir() });
+  const first = run(['context', '--hermes'], { amrHome: home, cwd: tmpdir(), input: payload('pre_llm_call') });
+  assert.equal(first.status, 0, first.stderr);
+  assert.match(JSON.parse(first.stdout).context, /hermes durable fact/);
+  const again = run(['context', '--hermes'], { amrHome: home, cwd: tmpdir(), input: payload('pre_llm_call') });
+  assert.equal(again.stdout.trim(), '');
+  const compact = run(['context', '--hermes'], { amrHome: home, cwd: tmpdir(), input: payload('post_compaction') });
+  assert.equal(compact.stdout.trim(), '');
+  const after = run(['context', '--hermes'], { amrHome: home, cwd: tmpdir(), input: payload('pre_llm_call') });
+  assert.match(JSON.parse(after.stdout).context, /hermes durable fact/);
+});
+
 test('context clips oversized floor entries so the budget overrun stays bounded', () => {
   const home = tmpdir();
   const run0 = (args) => run(args, { amrHome: home });

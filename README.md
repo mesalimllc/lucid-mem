@@ -48,7 +48,7 @@ Triage rewrites archive their original wording. Superseded entries move to `arch
 
 ## About
 
-- **15 hosts, one install.** Cursor, Claude Code, Windsurf, Devin, Copilot, Codex, Cline, Muse, Claude Desktop, Antigravity, Gemini CLI, Zed, OpenCode, CommandCode, and Freebuff. Hooks where hosts expose them; rules and MCP where they do not.
+- **16 hosts, one install.** Cursor, Claude Code, Windsurf, Devin, Copilot, Codex, Cline, Muse, Hermes Agent, Claude Desktop, Antigravity, Gemini CLI, Zed, OpenCode, CommandCode, and Freebuff. Hooks where hosts expose them; rules and MCP where they do not.
 - **The save loop is measured.** `amr coverage` reports a save rate against real transcripts, logs a trend, queues misses, and can sample unflagged messages through a judge to estimate its own false-negative rate.
 - **Real judge, real transcripts.** Reflection and triage run against installed `claude` or `codex` CLIs, not a mock. In one dry run on a real memory repo, triage classified 91 of 92 legacy entries — 7 keep, 69 rewrite, 15 archive — with originals archived.
 - **Boring where it matters.** A zero-runtime-dependency Node CLI, git as the storage engine, atomic writes, a write lock, bounded hook timeouts, and `exit 0` on soft failure. A memory hook should never break a session.
@@ -126,6 +126,7 @@ amr sync
 | Codex | `~/.codex/AGENTS.md` | - | `config.toml` |
 | Cline | `~/Documents/Cline/Rules/`, `~/.cline/AGENTS.md` | - | `~/.cline/mcp.json` |
 | Muse | `SOUL.md` | - | - |
+| Hermes Agent | `SOUL.md` (`$HERMES_HOME`) | shell hooks in `config.yaml`: `pre_llm_call` inject, `post_compaction` re-arm | `config.yaml` (`mcp_servers`) |
 | Claude Desktop | - | - | `claude_desktop_config.json` |
 | Antigravity | `~/.gemini/GEMINI.md` | - | `mcp_config.json` |
 | Gemini CLI | `~/.gemini/GEMINI.md` | - | `~/.gemini/settings.json` (`mcpServers`) |

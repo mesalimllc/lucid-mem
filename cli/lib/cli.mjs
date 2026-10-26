@@ -33,7 +33,7 @@ const USAGE = `amr: agent memory CLI (lucid-mem)
 usage: amr <command> [args] [flags]
 
   ensure                        create/verify the memory repo ($AMR_HOME, default ~/agent-memory)
-  context [dir] [--budget N]    ranked session digest (default 6000 chars; --full ignores): project-scoped inside a known repo; global + pooled projects outside; --hook (SessionStart) suppresses unchanged compaction re-injections
+  context [dir] [--budget N]    ranked session digest (default 6000 chars; --full ignores): project-scoped inside a known repo; global + pooled projects outside; --hook (Claude SessionStart) suppresses unchanged compaction re-injections; --hermes (Hermes shell hooks) injects once per session via pre_llm_call, re-arms on post_compaction
   recall ["<error text>"]       surface the memory entry matching a tool error (PostToolUse hook reads the payload on stdin with --hook); silent when nothing matches
   add "text"                    save a memory entry
   update <id|"match"> "text"   replace an entry in place; ids look like a3f9 (shown in entry meta)
@@ -72,7 +72,7 @@ flags:
 // swallowed the entry text as the flag's value. --project scopes by name
 // only in the `--project=name` form.
 const BOOL_FLAGS = new Set([
-  'project', 'full', 'json', 'fix', 'compact', 'inline', 'spin', 'hook',
+  'project', 'full', 'json', 'fix', 'compact', 'inline', 'spin', 'hook', 'hermes',
   'extract', 'no-log', 'allow-secret', 'if-stale-off', 'triage', 'apply',
 ]);
 

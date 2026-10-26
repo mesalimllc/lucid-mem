@@ -54,6 +54,14 @@ const zedConfig =
   process.platform === 'win32'
     ? path.join(appdata, 'Zed')
     : path.join(xdgConfigHome, 'zed');
+// Nous Hermes Agent home: $HERMES_HOME when set, else the platform
+// default (Windows desktop installs live under LOCALAPPDATA).
+const hermesHome = () =>
+  process.env.HERMES_HOME
+    ? path.resolve(process.env.HERMES_HOME)
+    : process.platform === 'win32'
+      ? path.join(localappdata, 'hermes')
+      : path.join(home, '.hermes');
 
 const HOSTS = {
   cursor: {
@@ -175,6 +183,21 @@ const HOSTS = {
     rules: () => [
       {
         path: path.join(localappdata, 'hermes', 'SOUL.md'),
+        content: RULE_BLOCK,
+        append: true,
+      },
+    ],
+  },
+  hermes: {
+    // Nous Hermes Agent. SOUL.md is its global instructions file;
+    // config.yaml carries MCP servers (mcp_servers) and shell hooks:
+    // pre_llm_call injects `amr context --hermes`, post_compaction
+    // re-arms the injection. Only the default profile is wired.
+    detect: () => fs.existsSync(hermesHome()),
+    configYaml: () => path.join(hermesHome(), 'config.yaml'),
+    rules: () => [
+      {
+        path: path.join(hermesHome(), 'SOUL.md'),
         content: RULE_BLOCK,
         append: true,
       },
@@ -357,6 +380,94 @@ function mergeMcpZed(file) {
     args: [CLI_ENTRY, 'serve'],
     env: {},
   });
+}
+
+// Hermes config.yaml is YAML and lucid-mem has no YAML parser, so the
+// merge is textual and conservative (same contract as mergeMcpToml):
+// back up first, only insert under a plain block `mcp_servers:` /
+// `hooks:` key, and skip (fail closed) when the section is a flow
+// mapping or the hook events we need already exist. JSON string
+// quoting is valid YAML double-quoted style.
+const yamlArg = (s) => JSON.stringify(String(s).replace(/\\/g, '/'));
+const hermesHookCommand = `node "${CLI_ENTRY.replace(/\\/g, '/')}" context --hermes`;
+
+function insertUnderKey(lines, key, block) {
+  const idx = lines.findIndex((l) => new RegExp(`^${key}:\\s*(#.*)?$`).test(l));
+  if (idx >= 0) {
+    lines.splice(idx + 1, 0, ...block);
+    return true;
+  }
+  if (new RegExp(`^${key}:`, 'm').test(lines.join('\n'))) return false; // non-block form
+  lines.push('', `${key}:`, ...block);
+  return true;
+}
+
+function mergeMcpYaml(file) {
+  const block = [
+    '  agent-memory:',
+    '    command: "node"',
+    `    args: [${yamlArg(CLI_ENTRY)}, "serve"]`,
+  ];
+  if (!fs.existsSync(file)) {
+    fs.mkdirSync(path.dirname(file), { recursive: true });
+    fs.writeFileSync(file, `mcp_servers:\n${block.join('\n')}\n`);
+    return true;
+  }
+  const text = fs.readFileSync(file, 'utf8');
+  if (/(^|\n) {2}agent-memory:/.test(text)) return false;
+  const lines = text.split('\n');
+  backup(file);
+  if (!insertUnderKey(lines, 'mcp_servers', block))
+    return 'skipped (mcp_servers is not a block mapping; add agent-memory manually)';
+  fs.writeFileSync(file, lines.join('\n'));
+  return true;
+}
+
+function mergeHermesHooks(file) {
+  const entry = (event) => [
+    `  ${event}:`,
+    `    - command: ${yamlArg(hermesHookCommand)}`,
+    '      timeout: 30',
+  ];
+  const text = fs.existsSync(file) ? fs.readFileSync(file, 'utf8') : '';
+  if (text.includes('context --hermes')) return false;
+  // A pre-existing pre_llm_call/post_compaction key would collide with
+  // ours (duplicate YAML key); leave the file untouched.
+  if (/^\s+(pre_llm_call|post_compaction):/m.test(text))
+    return 'skipped (existing pre_llm_call/post_compaction hook; add the agent-memory hooks manually)';
+  const lines = text.split('\n');
+  backup(file);
+  if (!insertUnderKey(lines, 'hooks', [...entry('pre_llm_call'), ...entry('post_compaction')]))
+    return 'skipped (hooks is not a block mapping; add the agent-memory hooks manually)';
+  fs.mkdirSync(path.dirname(file), { recursive: true });
+  fs.writeFileSync(file, lines.join('\n'));
+  return true;
+}
+
+function unmergeMcpYaml(file) {
+  if (!fs.existsSync(file)) return false;
+  const text = fs.readFileSync(file, 'utf8');
+  const next = text.replace(/\n? {2}agent-memory:\n {4}command: [^\n]*\n {4}args: [^\n]*/, '');
+  if (next === text) return false;
+  backup(file);
+  fs.writeFileSync(file, next);
+  return true;
+}
+
+function unmergeHermesHooks(file) {
+  if (!fs.existsSync(file)) return false;
+  let text = fs.readFileSync(file, 'utf8');
+  if (!text.includes('context --hermes')) return false;
+  for (const event of ['pre_llm_call', 'post_compaction'])
+    text = text.replace(
+      new RegExp(`\\n? {2}${event}:\\n {4}- command: [^\\n]*context --hermes[^\\n]*\\n {6}timeout: \\d+`),
+      ''
+    );
+  // Drop a now-empty hooks: header we may have created.
+  text = text.replace(/\nhooks:\s*\n(?=\S|$)/, '\n');
+  backup(file);
+  fs.writeFileSync(file, text);
+  return true;
 }
 
 function backup(file) {
@@ -610,15 +721,34 @@ export function cmdInstall(flags) {
             : `mcp ${res}: ${file}`
         );
       }
+      if (h.configYaml) {
+        const file = h.configYaml();
+        const m = mergeMcpYaml(file);
+        did.push(
+          m === true
+            ? `mcp +agent-memory in ${file}`
+            : m === false
+            ? `mcp already wired in ${file}`
+            : `mcp ${m}: ${file}`
+        );
+        const hk = mergeHermesHooks(file);
+        did.push(
+          hk === true
+            ? `hooks +pre_llm_call,post_compaction in ${file}`
+            : hk === false
+            ? `hooks already wired in ${file}`
+            : `hooks ${hk}: ${file}`
+        );
+      }
     } catch (e) {
       err(`${name}: ${e.message}`);
       failed.push(name);
       continue;
     }
     for (const d of did) out(`${name}: ${d}`);
-    // A config left untouched because it could not be parsed means the
-    // host is not wired; automation must see that as a failure.
-    if (did.some((d) => d.includes('skipped (unparseable)'))) failed.push(name);
+    // A config left untouched because it could not be merged means the
+    // host is not (fully) wired; automation must see that as a failure.
+    if (did.some((d) => d.includes('skipped ('))) failed.push(name);
   }
   out('');
   if (failed.length) {
@@ -779,6 +909,12 @@ export function cmdUninstall(flags) {
         did.push(`mcp entry removed from ${h.mcpOpencode()}`);
       if (h.mcpZed && unmergeMcpZed(h.mcpZed()))
         did.push(`mcp entry removed from ${h.mcpZed()}`);
+      if (h.configYaml) {
+        if (unmergeMcpYaml(h.configYaml()))
+          did.push(`mcp entry removed from ${h.configYaml()}`);
+        if (unmergeHermesHooks(h.configYaml()))
+          did.push(`hooks removed from ${h.configYaml()}`);
+      }
     } catch (e) {
       err(`${name}: ${e.message}`);
       continue;
@@ -799,6 +935,7 @@ function hostWired(name) {
       (h.mcpJson && has(h.mcpJson(), 'agent-memory')) ||
       (h.mcpToml && has(h.mcpToml(), 'agent-memory')) ||
       (h.mcpOpencode && has(h.mcpOpencode(), 'agent-memory')) ||
+      (h.configYaml && has(h.configYaml(), 'agent-memory')) ||
       (h.mcpZed && has(h.mcpZed(), 'agent-memory'));
     if (h.rules && h.rules().some((r) => has(r.path, MARK_BEGIN) || has(r.path, LEGACY_MARK_BEGIN)))
       return mcp ? 'wired (rules+mcp)' : 'wired (rules only)';
