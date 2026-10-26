@@ -89,6 +89,11 @@ test('install --host claude wires Stop→reflect alongside session hooks', () =>
   const cmds = (ev) =>
     (cfg.hooks?.[ev] || []).flatMap((e) => (e.hooks || []).map((h) => h.command));
   assert.ok(cmds('SessionStart').some((c) => c.includes('amr.mjs" context')));
+  assert.ok(cmds('SessionStart').some((c) => c.includes('--hook')));
+  const post = cfg.hooks?.PostToolUse || [];
+  assert.ok(
+    post.some((e) => e.matcher === 'Bash' && (e.hooks || []).some((h) => h.command.includes('amr.mjs" recall')))
+  );
   assert.ok(cmds('SessionEnd').some((c) => c.includes('coverage')));
   const stops = cmds('Stop');
   assert.ok(stops.some((c) => c.includes('amr.mjs" reflect')));

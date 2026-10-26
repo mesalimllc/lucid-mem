@@ -95,8 +95,9 @@ amr sync
 | Command | What it does |
 |---|---|
 | `amr ensure` | Idempotent init: `git init`, `MEMORY.md`, first commit. Never touches global git config. |
-| `amr context [dir]` | Ranked session digest. Project-scoped inside a known repo; global plus a pooled digest outside. `--budget N`, `--also a,b`, `--full`. |
-| `amr add "text"` | Save a memory. `--project[=name]`, `--file topic`, `--kind`. Refuses secret-shaped input and warns on session-state detail. |
+| `amr context [dir]` | Ranked session digest. Project-scoped inside a known repo; global plus a pooled digest outside. `--budget N`, `--also a,b`, `--full`. Budget is spent on the current project's entries first, then pooled projects, then globals. As a Claude Code SessionStart hook (`--hook`), an unchanged compaction re-injection is suppressed and a changed one sends only new entries. |
+| `amr recall ["error"]` | Failure-triggered recall: the live entry matching a tool error (heredoc/CS1010, shell EOF, Python `SyntaxError`, cp1252 to start), or nothing. Wired as a Claude Code `PostToolUse` (Bash) hook with `--hook`; also runnable by hand. |
+| `amr add "text"` | Save a memory. `--project[=name]`, `--file topic`, `--kind`. Refuses secret-shaped input, warns on session-state detail, and on a near-duplicate points at `amr update <id>` instead of saving a copy. |
 | `amr update <id> "text"` | Replace an entry by id or unique text match, preserving metadata. |
 | `amr supersede <id> ["text"]` | Retire an entry to `archive/superseded.md`, optionally with a replacement. |
 | `amr used <id...>`, `amr ids` | Credit entries that helped; backfill ids for legacy entries. |
@@ -137,7 +138,7 @@ Rules-only hosts rely on the agent reading its global instruction file each sess
 
 ## Multi-repo memory
 
-One memory repo serves every project. Project files live at `projects/<name>-<hash>.md`, where the hash is six characters of SHA-1 over the origin remote URL, so two clones of one remote share memory and two unrelated repos with the same name do not collide.
+One memory repo serves every project. Project files live at `projects/<name>-<hash>.md`, where the name and hash both derive from the origin remote URL, so two clones or worktrees of one remote share memory (whatever their checkout dirs are called) and two unrelated repos with the same name do not collide. Files created under the older checkout-dir naming still attach as a fallback.
 
 - `amr context` is project-scoped inside a repo with a memory file, and global-plus-pooled outside one.
 - `amr link` attaches another repo's memory directionally and transitively.

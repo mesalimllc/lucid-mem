@@ -26,13 +26,15 @@ import { cmdHarvest } from './harvest.mjs';
 import { cmdCoverage } from './coverage.mjs';
 import { cmdDoctor, cmdInstall, cmdUninstall } from './install.mjs';
 import { cmdServe } from './serve.mjs';
+import { cmdRecall } from './recall.mjs';
 
 const USAGE = `amr: agent memory CLI (lucid-mem)
 
 usage: amr <command> [args] [flags]
 
   ensure                        create/verify the memory repo ($AMR_HOME, default ~/agent-memory)
-  context [dir] [--budget N]    ranked session digest (default 6000 chars; --full ignores): project-scoped inside a known repo; global + pooled projects outside
+  context [dir] [--budget N]    ranked session digest (default 6000 chars; --full ignores): project-scoped inside a known repo; global + pooled projects outside; --hook (SessionStart) suppresses unchanged compaction re-injections
+  recall ["<error text>"]       surface the memory entry matching a tool error (PostToolUse hook reads the payload on stdin with --hook); silent when nothing matches
   add "text"                    save a memory entry
   update <id|"match"> "text"   replace an entry in place; ids look like a3f9 (shown in entry meta)
   supersede <id> ["text"]       retire an entry to archive/superseded.md, optionally with a replacement
@@ -70,7 +72,7 @@ flags:
 // swallowed the entry text as the flag's value. --project scopes by name
 // only in the `--project=name` form.
 const BOOL_FLAGS = new Set([
-  'project', 'full', 'json', 'fix', 'compact', 'inline', 'spin',
+  'project', 'full', 'json', 'fix', 'compact', 'inline', 'spin', 'hook',
   'extract', 'no-log', 'allow-secret', 'if-stale-off', 'triage', 'apply',
 ]);
 
@@ -120,7 +122,7 @@ function spaceFormProject(rest, flags, pos) {
 // own hooks don't pay for context/sync/dream/coverage on the way in
 // and out — that overhead dominated judge latency — and so a judge
 // session's Stop event doesn't get hijacked by `reflect` mid-answer.
-const HOOK_CMDS = new Set(['context', 'sync', 'dream', 'coverage', 'reflect']);
+const HOOK_CMDS = new Set(['context', 'sync', 'dream', 'coverage', 'reflect', 'recall']);
 
 export function main(argv) {
   const [cmd, ...rest] = argv;
@@ -152,6 +154,8 @@ export function main(argv) {
         }
         return cmdUpdate(match, text, flags);
       }
+      case 'recall':
+        return cmdRecall(pos.join(' '), flags);
       case 'search': {
         const term = pos.join(' ');
         if (!term.trim()) {

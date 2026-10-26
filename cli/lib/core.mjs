@@ -80,9 +80,22 @@ export function projectFor(dir) {
   const remote = sh('git', ['remote', 'get-url', 'origin'], { cwd: toplevel });
   const basis =
     remote.code === 0 && remote.stdout.trim() ? remote.stdout.trim() : toplevel;
+  // The name comes from the remote when there is one, so every clone and
+  // worktree of a repo shares one slug; the checkout dir name (which
+  // varies per worktree) only names remote-less repos.
+  const rawName =
+    (remote.code === 0 &&
+      remote.stdout
+        .trim()
+        .replace(/[\\/]+$/, '')
+        .replace(/\.git$/i, '')
+        .split(/[\\/]/)
+        .pop()
+        .split(':')
+        .pop()) ||
+    path.basename(toplevel);
   const name =
-    path
-      .basename(toplevel)
+    rawName
       .toLowerCase()
       .replace(/[^a-z0-9]+/g, '-')
       .replace(/^-+|-+$/g, '') || 'repo';
@@ -91,7 +104,7 @@ export function projectFor(dir) {
     .update(basis.toLowerCase())
     .digest('hex')
     .slice(0, 6);
-  return { slug: `${name}-${hash}`, name: path.basename(toplevel), toplevel };
+  return { slug: `${name}-${hash}`, name: rawName, toplevel };
 }
 
 export function sanitizeFile(input) {

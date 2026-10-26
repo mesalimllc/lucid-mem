@@ -44,6 +44,22 @@ export function similarity(a, b) {
 export const isNearDuplicate = (text, others) =>
   others.some((o) => similarity(text, o) >= SIMILAR);
 
+// Best near-duplicate among existing entry lines, or null. Used by
+// `amr add` to point at `amr update <id>` instead of saving a copy.
+// Short entries are exempt: their token sets are tiny ("entry number 0"
+// vs "entry number 1" score 1.0 once digits drop out), so a match there
+// is noise, and exact copies are already caught by entryExists.
+export function nearDuplicate(text, lines) {
+  if (words(text).size < 6) return null;
+  let best = null;
+  for (const line of lines) {
+    const score = similarity(text, line);
+    if (score >= SIMILAR && (!best || score > best.score))
+      best = { line, score };
+  }
+  return best;
+}
+
 // "- [reflect] 2026-10-24 add pitfall project: text"
 // "- [reflect] 2026-10-24 update a3f9: text"
 const ITEM = /^- \[reflect\] (\d{4}-\d{2}-\d{2}) (.+?): (.*)$/;

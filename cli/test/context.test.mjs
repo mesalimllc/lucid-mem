@@ -142,6 +142,61 @@ test('context ranks by kind/recency within a budget; `amr used` boosts entries, 
   assert.match(run0(['context', '--full']).stdout, /number 0/);
 });
 
+test('project identity is worktree-stable: slug derives from the origin remote, not the checkout dir name', () => {
+  const home = tmpdir();
+  const base = tmpdir();
+  const main = initRepo(path.join(base, 'app'), 'https://github.com/acme/app.git');
+  const worktree = initRepo(path.join(base, 'app-feature-x'), 'https://github.com/acme/app.git');
+  run(['ensure'], { amrHome: home });
+  seed(home, main, 'app uses redis cache');
+  run(['add', 'global pref'], { amrHome: home });
+  const r = run(['context'], { amrHome: home, cwd: worktree });
+  assert.equal(r.status, 0, r.stderr);
+  assert.match(r.stdout, /app uses redis cache/);
+  // Same project, so the digest is project-scoped, not the pooled dump.
+  assert.ok(!r.stdout.includes('global pref'));
+  assert.ok(!r.stdout.includes('## Recent project memory'));
+});
+
+test('outside context spends budget on pooled project entries before global ones', () => {
+  const home = tmpdir();
+  const repo = initRepo(path.join(tmpdir(), 'pooled'), 'https://github.com/acme/pooled.git');
+  run(['ensure'], { amrHome: home });
+  const tail = 'padding '.repeat(40) + 'TAILMARKER';
+  seed(home, repo, `pooled project fact ${tail}`);
+  const mem = path.join(home, 'MEMORY.md');
+  fs.writeFileSync(
+    mem,
+    fs.readFileSync(mem, 'utf8').replace(
+      '## Index',
+      `- global fact ${tail} [added: 2026-10-20; kind: fact; id: d001]\n\n## Index`
+    )
+  );
+  const out = run(['context', '--budget', '600'], { amrHome: home, cwd: tmpdir() }).stdout;
+  // Pooled entry was allocated first and survives whole; the global
+  // entry only got the leftover budget and was floor-clipped.
+  const pooled = out.split('\n').find((l) => l.includes('pooled project fact'));
+  const global = out.split('\n').find((l) => l.includes('global fact'));
+  assert.ok(pooled.includes('TAILMARKER'), pooled);
+  assert.ok(!global.includes('TAILMARKER'), global);
+});
+
+test('context --hook: a compaction re-injection with nothing new is suppressed; later ones are deltas', () => {
+  const home = tmpdir();
+  run(['ensure'], { amrHome: home });
+  run(['add', 'first durable fact'], { amrHome: home });
+  const payload = (source) =>
+    JSON.stringify({ session_id: 'sess-1', source, cwd: tmpdir() });
+  const start = run(['context', '--hook'], { amrHome: home, cwd: tmpdir(), input: payload('startup') });
+  assert.match(start.stdout, /first durable fact/);
+  const compact1 = run(['context', '--hook'], { amrHome: home, cwd: tmpdir(), input: payload('compact') });
+  assert.equal(compact1.stdout.trim(), '');
+  run(['add', 'second durable fact'], { amrHome: home });
+  const compact2 = run(['context', '--hook'], { amrHome: home, cwd: tmpdir(), input: payload('compact') });
+  assert.match(compact2.stdout, /second durable fact/);
+  assert.ok(!compact2.stdout.includes('first durable fact'));
+});
+
 test('context clips oversized floor entries so the budget overrun stays bounded', () => {
   const home = tmpdir();
   const run0 = (args) => run(args, { amrHome: home });

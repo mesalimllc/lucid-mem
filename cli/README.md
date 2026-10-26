@@ -24,6 +24,7 @@ amr context               # what a session here would see
 amr add "I prefer concise summaries"          # global memory
 amr add "uses Kokoro-82M for TTS" --project   # this repo's memory
 amr search "tts"
+amr recall "error CS1010: Newline in constant"  # the entry matching a tool error, if any
 amr link other-repo       # auto-attach another repo's memory to sessions here
 amr peer add <url>        # compose a teammate's memory repo into your context
 amr discover              # which hot repos still lack memory

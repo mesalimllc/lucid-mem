@@ -426,7 +426,7 @@ function mergeClaudeSettings(file, entries) {
   }
   cfg.hooks ||= {};
   const added = [];
-  for (const [event, sub] of entries) {
+  for (const [event, sub, matcher] of entries) {
     const key = sub.split(' ')[0];
     const want = hookCmd(sub);
     const list = (cfg.hooks[event] ||= []);
@@ -446,7 +446,10 @@ function mergeClaudeSettings(file, entries) {
       }
     }
     if (!found) {
-      list.push({ hooks: [{ type: 'command', command: want }] });
+      list.push({
+        ...(matcher ? { matcher } : {}),
+        hooks: [{ type: 'command', command: want }],
+      });
       added.push(`${event}:${sub}`);
     }
   }
@@ -539,8 +542,13 @@ export function cmdInstall(flags) {
         const added = mergeClaudeSettings(file, [
           ...HOOK_ENTRIES.map(([e, s]) => [
             e[0].toUpperCase() + e.slice(1),
-            s,
+            // SessionStart reads its payload (--hook) so a compaction
+            // re-injection can be suppressed or delta-only.
+            e === 'sessionStart' ? 'context --hook' : s,
           ]),
+          // Failure-triggered recall: surface the one relevant pitfall
+          // when a shell tool errors, not in the session-start dump.
+          ['PostToolUse', 'recall --hook', 'Bash'],
           // Stop supports block-and-continue: `amr reflect` asks the
           // session to save durable learnings the user never stated.
           ['Stop', 'reflect'],
