@@ -29,9 +29,9 @@ lucid-mem runs underneath the agent's normal workflow in four moves:
 - **Maintain continuously.** Session-end work and scheduled dreams dedupe, compact, expire transient state, and queue ambiguous learnings for review.
 - **Measure the result.** `amr coverage` replays transcripts, finds durable signals the agent missed, and reports a save rate. The loop is observable, not aspirational.
 
-## The memory-quality release
+## The bounded-memory release
 
-This release fixes the failure mode every memory system eventually hits: accumulating more than it understands.
+This release closes the loop on growth: entries expire by default, retired ones can leave zero trace, context ranks by relevance to the work at hand, and the store proposes its own merges before the digest budget runs out.
 
 | Area | What shipped | Why it matters |
 |---|---|---|
@@ -160,7 +160,7 @@ One memory repo serves every project. Project files live at `projects/<name>-<ha
 
 ## Honest limits
 
-- **Pre-1.0.** The CLI is 0.8.x; commands and config keys can still move.
+- **Pre-1.0.** The CLI is 0.9.x; commands and config keys can still move.
 - **Saving is probabilistic.** The rule block and reflection improve adherence; they cannot guarantee it. That is why `amr coverage` exists.
 - **Judges cost quota.** Reflection and triage are opt-in and use an installed agent CLI. Deterministic coverage works without them.
 - **Host coverage is uneven.** Hooks exist only where a host exposes them; some hosts are rules-only or MCP-only. Windsurf's Cascade transcripts are not harvested.
