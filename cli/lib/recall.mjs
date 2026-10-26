@@ -12,6 +12,57 @@ import { entryId } from './ids.mjs';
 
 const out = (s = '') => process.stdout.write(s + '\n');
 
+// Per-session dedupe: the PostToolUse hook fires on every tool error, and
+// without memory of what it already showed, the same "relevant" entries
+// re-inject all session. .git/amr-recall-state.json maps a session key to
+// {entryKey: timestamp}; anything surfaced in the last window stays quiet.
+const RECALL_STATE = 'amr-recall-state.json';
+const RESHOW_MS = 4 * 3600e3;
+const KEEP_MS = 7 * 864e5;
+
+function loadRecallState(home) {
+  try {
+    const s = JSON.parse(fs.readFileSync(path.join(home, '.git', RECALL_STATE), 'utf8'));
+    return s && typeof s === 'object' && !Array.isArray(s) ? s : {};
+  } catch {
+    return {};
+  }
+}
+
+// hit keys are entry ids; id-less lines dedupe by their first chars.
+const hitKey = (line) => entryId(line) || `txt:${line.trim().slice(0, 80)}`;
+
+function filterFresh(home, sessionKey, hits, now = Date.now()) {
+  if (!hits.length) return hits;
+  const state = loadRecallState(home);
+  // Drop stale sessions and stale hits inside surviving sessions.
+  for (const k of Object.keys(state)) {
+    const bucket = state[k];
+    if (!bucket || typeof bucket !== 'object') {
+      delete state[k];
+      continue;
+    }
+    for (const id of Object.keys(bucket))
+      if (now - bucket[id] > KEEP_MS) delete bucket[id];
+    if (!Object.keys(bucket).length) delete state[k];
+  }
+  const seen = state[sessionKey] || {};
+  const fresh = hits.filter((l) => {
+    const ts = seen[hitKey(l)];
+    return !ts || now - ts > RESHOW_MS;
+  });
+  if (!fresh.length) return fresh;
+  state[sessionKey] = { ...seen };
+  for (const l of fresh) state[sessionKey][hitKey(l)] = now;
+  const abs = path.join(home, '.git', RECALL_STATE);
+  const tmp = `${abs}.${process.pid}.tmp`;
+  try {
+    fs.writeFileSync(tmp, JSON.stringify(state));
+    fs.renameSync(tmp, abs);
+  } catch {}
+  return fresh;
+}
+
 // Known error shapes and the vocabulary of the entries that fix them.
 // First entries: shell heredocs mangling escapes (CS1010 from C#
 // string literals, shell EOF, Python SyntaxError) and cp1252 decoding.
@@ -64,7 +115,6 @@ function liveEntries(home) {
 export function findRecall(home, errorText, limit = 3) {
   if (!errorText || !looksLikeError(errorText)) return [];
   const errTokens = tokens(errorText);
-  const lower = errorText.toLowerCase();
   const triggerTerms = TRIGGERS.filter((t) => t.re.test(errorText)).flatMap(
     (t) => t.terms
   );
@@ -72,10 +122,26 @@ export function findRecall(home, errorText, limit = 3) {
   for (const line of liveEntries(home)) {
     const text = line.toLowerCase();
     let score = 0;
-    for (const w of tokens(line)) if (errTokens.has(w)) score += 1;
-    for (const term of triggerTerms) if (text.includes(term)) score += 4;
+    let strong = 0; // shared tokens long enough to be a real topic
+    let medium = 0;
+    for (const w of tokens(line))
+      if (errTokens.has(w)) {
+        score += 1;
+        if (w.length >= 6) strong++;
+        else if (w.length >= 5) medium++;
+      }
+    let triggerHit = false;
+    for (const term of triggerTerms)
+      if (text.includes(term)) {
+        score += 4;
+        triggerHit = true;
+      }
     if (entryKind(line) === 'pitfall') score += 0.5;
-    if (score >= 4) scored.push({ line, score });
+    // Gate, not just score: without a trigger or a specific shared token,
+    // overlap on ambient words ("error", "mem", cwd names) fires the hook
+    // on every unrelated failure.
+    if (score >= 4 && (triggerHit || strong >= 1 || medium >= 2))
+      scored.push({ line, score });
   }
   return scored
     .sort((a, b) => b.score - a.score)
@@ -112,7 +178,9 @@ export function cmdRecall(text, flags) {
       }
     }
   }
-  const hits = findRecall(home, errorText);
+  const sid =
+    payload?.session_id || payload?.sessionId || payload?.conversation_id;
+  const hits = filterFresh(home, sid ? `s:${sid}` : 'anon', findRecall(home, errorText));
   if (!hits.length) return;
   if (flags.hook) {
     out(

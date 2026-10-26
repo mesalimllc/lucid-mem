@@ -21,7 +21,7 @@ import {
 import { cmdDiscover } from './discover.mjs';
 import { cmdDream } from './dream.mjs';
 import { cmdReflectRun } from './reflect.mjs';
-import { cmdIds, cmdSupersede } from './ids.mjs';
+import { cmdDelete, cmdIds, cmdSupersede } from './ids.mjs';
 import { cmdHarvest } from './harvest.mjs';
 import { cmdCoverage } from './coverage.mjs';
 import { cmdDoctor, cmdInstall, cmdUninstall } from './install.mjs';
@@ -38,9 +38,10 @@ usage: amr <command> [args] [flags]
   add "text"                    save a memory entry
   update <id|"match"> "text"   replace an entry in place; ids look like a3f9 (shown in entry meta)
   supersede <id> ["text"]       retire an entry to archive/superseded.md, optionally with a replacement
+  delete <id>                   remove an entry entirely (alias: rm); recover via "search --history"
   used <id...>                  mark entries that helped (boosts them in context ranking)
   ids                           assign ids to entries that lack them
-  search "term"                 grep all memory files
+  search "term"                 grep all memory files (--history also greps past commits)
   index                         rebuild MEMORY.md index from files on disk
   link <name...> [--for <p>]    auto-attach other repos' memories to this repo's sessions
   unlink <name...> [--for <p>]  remove auto-attach links
@@ -64,6 +65,8 @@ flags:
   --also a,b                    attach extra projects to the context digest
   --file <topic>                write to a topic file instead of MEMORY.md
   --kind <k>                    add kind metadata (pitfall|decision|preference|fact|howto|state)
+  --ttl <days>                  expire an entry after N days (default 30, 2 for state; 0 = durable)
+  --durable                     opt the entry out of expiry (also drops it on update)
   --cwd <dir>                   resolve project/host context against this dir
   --allow-secret                bypass secret-shape refusal
 `;
@@ -74,6 +77,7 @@ flags:
 const BOOL_FLAGS = new Set([
   'project', 'full', 'json', 'fix', 'compact', 'inline', 'spin', 'hook', 'hermes',
   'extract', 'no-log', 'allow-secret', 'if-stale-off', 'triage', 'apply',
+  'durable', 'history',
 ]);
 
 function parseFlags(argv) {
@@ -163,7 +167,7 @@ export function main(argv) {
           process.exitCode = 1;
           return;
         }
-        return cmdSearch(term);
+        return cmdSearch(term, flags);
       }
       case 'index':
         return cmdIndex();
@@ -204,6 +208,14 @@ export function main(argv) {
           return;
         }
         return cmdSupersede(pos[0], pos.slice(1).join(' '));
+      case 'delete':
+      case 'rm':
+        if (!pos[0]) {
+          process.stderr.write('usage: amr delete <id>\n');
+          process.exitCode = 1;
+          return;
+        }
+        return cmdDelete(pos[0]);
       case 'reflect-run':
         return cmdReflectRun(pos[0]);
       case 'install':

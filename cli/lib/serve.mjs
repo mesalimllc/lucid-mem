@@ -9,6 +9,7 @@ import {
   cmdUpdate,
   cmdSearch,
 } from './commands.mjs';
+import { cmdDelete } from './ids.mjs';
 
 const dir = path.dirname(fileURLToPath(import.meta.url));
 const pkg = JSON.parse(
@@ -63,7 +64,7 @@ const TOOLS = [
   {
     name: 'memory_add',
     description:
-      'Save a durable memory entry (preference, fact, decision, correction, project detail) unprompted when the user states something worth keeping across sessions. One concise line. Never store secrets.',
+      'Save a memory entry (preference, fact, decision, correction, project detail) unprompted when the user states something worth keeping across sessions. One concise line. Entries expire after `ttl` days unless `durable` is set. Never store secrets.',
     inputSchema: {
       type: 'object',
       properties: {
@@ -81,11 +82,17 @@ const TOOLS = [
           type: 'string',
           enum: KINDS,
           description:
-            'Entry type. Use "state" for session state (open PRs, what was just committed); it expires. Everything else is durable.',
+            'Entry type. Use "state" for session state (open PRs, what was just committed); it expires in 2 days.',
         },
         ttl: {
           type: 'integer',
-          description: 'Days until a "state" entry expires (default 2).',
+          description:
+            'Days until the entry expires (default 30, or 2 for "state"). 0 makes it durable forever.',
+        },
+        durable: {
+          type: 'boolean',
+          description:
+            'Opt out of expiry: keep the entry until explicitly deleted or superseded.',
         },
         directory: { type: 'string' },
       },
@@ -98,24 +105,29 @@ const TOOLS = [
           file: a.file,
           kind: a.kind,
           ttl: a.ttl,
+          durable: a.durable,
           cwd: a.directory,
         })
       ),
   },
   {
     name: 'memory_search',
-    description: 'Search all memory entries for a term.',
+    description:
+      'Search all memory entries for a term. Set `history` to also grep past commits, so deleted and superseded entries stay findable.',
     inputSchema: {
       type: 'object',
-      properties: { term: { type: 'string' } },
+      properties: {
+        term: { type: 'string' },
+        history: { type: 'boolean', description: 'Also search git history' },
+      },
       required: ['term'],
     },
-    run: (a) => run(() => cmdSearch(a.term)),
+    run: (a) => run(() => cmdSearch(a.term, { history: a.history })),
   },
   {
     name: 'memory_update',
     description:
-      'Update an existing memory entry instead of adding a contradicting one. Address it by `id` (the `id: xxxx` in its meta, shown in memory_context output).',
+      'Update an existing memory entry instead of adding a contradicting one. Address it by `id` (the `id: xxxx` in its meta, shown in memory_context output). Updating rolls its expiry forward unless `durable` is set.',
     inputSchema: {
       type: 'object',
       properties: {
@@ -125,6 +137,8 @@ const TOOLS = [
           description: 'Deprecated: substring of the entry text. Prefer `id`.',
         },
         text: { type: 'string', description: 'Replacement entry text' },
+        ttl: { type: 'integer', description: 'Override expiry in days; 0 makes it durable.' },
+        durable: { type: 'boolean', description: 'Make the entry durable (drop expiry).' },
       },
       required: ['text'],
     },
@@ -134,8 +148,21 @@ const TOOLS = [
         return run(() => {
           throw new Error('memory_update needs an `id` (or deprecated `match`)');
         });
-      return run(() => cmdUpdate(key, a.text, {}));
+      return run(() => cmdUpdate(key, a.text, { ttl: a.ttl, durable: a.durable }));
     },
+  },
+  {
+    name: 'memory_delete',
+    description:
+      'Permanently remove a memory entry by id. Nothing stays in the tree (unlike supersede, which archives); git history is the recovery path — memory_search with `history` still finds it.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        id: { type: 'string', description: 'Entry id, e.g. "a3f9"' },
+      },
+      required: ['id'],
+    },
+    run: (a) => run(() => cmdDelete(a.id)),
   },
 ];
 

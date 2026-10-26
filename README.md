@@ -37,14 +37,15 @@ This release fixes the failure mode every memory system eventually hits: accumul
 |---|---|---|
 | **Quieter reflection** | `amr reflect` fires only after real work — six or more changing actions (edits, or shell commands that write, commit, or push), or twenty tool calls of any kind, which also catches investigation-only sessions — and runs as a detached background judge. Nothing prints in the session. | Memory improves without interrupting the person doing the work. |
 | **Reviewable learning** | Judge proposals land in `dreams/pending-reflections.md` and surface at the next session. Adds can auto-save; updates always wait for review. | The agent can learn without silently rewriting what you know. |
-| **Kinds and expiry** | Entries carry `pitfall`, `decision`, `preference`, `fact`, `howto`, or `state`. State entries expire after two days and drop out of context and cleanup. | Memory becomes a durable knowledge base, not a status feed. |
-| **Stable identity** | Every entry gets a short id such as `a3f9`: `amr update <id>`, `amr supersede <id>`, `amr used <id>`, `amr ids`. | Memory can be corrected, retired, and credited instead of appended forever. |
-| **Ranked context** | `amr context` ranks by kind, recency (60-day half-life), and explicit use inside a shared 6,000-character budget (`--budget`, `contextBudget`). `--full` opts out. | The digest stays small and relevant as the corpus grows. |
+| **Kinds and expiry** | Entries carry `pitfall`, `decision`, `preference`, `fact`, `howto`, or `state`. Everything expires by default: `state` in two days, other kinds in 30 (`--ttl N` overrides, `--durable` opts out). Expired entries drop out of context and recall; `amr update` renews the clock, and `dream --fix` renews recently used ones instead of dropping them. | Memory ages like knowledge does; nothing has to be manually swept. |
+| **Stable identity** | Every entry gets a short id such as `a3f9`: `amr update <id>`, `amr supersede <id>`, `amr delete <id>`, `amr used <id>`, `amr ids`. | Memory can be corrected, retired, removed, and credited instead of appended forever. |
+| **Ranked context** | `amr context` ranks by kind, recency (60-day half-life), explicit use, and relevance to the current work (project, cwd, branch, recent files, transcript tail) inside a shared 6,000-character budget (`--budget`, `contextBudget`). `--full` opts out. | The digest stays small and relevant as the corpus grows. |
+| **Budget-pressure consolidation** | When a live file's entries cross ~80% of the digest budget, `amr add` and `amr dream` queue concrete merge/delete proposals (`[consolidate]` items) into the pending-candidates review queue instead of letting the next write silently rank out. | The store consolidates before it hits the wall, and nothing is rewritten without review. |
 | **Backlog triage** | `amr dream --triage` asks the judge to keep, rewrite, or archive legacy state-like entries. It writes a plan to `dreams/triage-plan.json`; `--apply` executes it. | Legacy untyped memory can become useful again — with a review step. |
 | **Better judge input** | The judge sees existing memory, failing tool output, and both the head and tail of long transcripts. Credential values in tool output are redacted first; anything still secret-shaped is dropped. | The model judges with the evidence that actually explains a lesson. |
 | **Wider coverage** | Gemini CLI and Zed join the host matrix. Gemini CLI shares `GEMINI.md` with Antigravity; Zed's JSONC settings are preserved. | One memory follows the engineer across more of their tools. |
 
-Triage rewrites archive their original wording. Superseded entries move to `archive/superseded.md`. The system is designed to be reversible.
+Triage rewrites archive their original wording. Superseded entries move to `archive/superseded.md`. `amr delete` is the one irreversible-looking operation — it removes the entry from the tree entirely — and even then git history keeps it (`amr search --history`). The system is designed to be reversible.
 
 ## About
 
@@ -96,20 +97,21 @@ amr sync
 |---|---|
 | `amr ensure` | Idempotent init: `git init`, `MEMORY.md`, first commit. Never touches global git config. |
 | `amr context [dir]` | Ranked session digest. Project-scoped inside a known repo; global plus a pooled digest outside. `--budget N`, `--also a,b`, `--full`. Budget is spent on the current project's entries first, then pooled projects, then globals. As a Claude Code SessionStart hook (`--hook`), an unchanged compaction re-injection is suppressed and a changed one sends only new entries. |
-| `amr recall ["error"]` | Failure-triggered recall: the live entry matching a tool error (heredoc/CS1010, shell EOF, Python `SyntaxError`, cp1252 to start), or nothing. Wired as a Claude Code `PostToolUse` (Bash) hook with `--hook`; also runnable by hand. |
-| `amr add "text"` | Save a memory. `--project[=name]`, `--file topic`, `--kind`. Refuses secret-shaped input, warns on session-state detail, and on a near-duplicate points at `amr update <id>` instead of saving a copy. |
-| `amr update <id> "text"` | Replace an entry by id or unique text match, preserving metadata. |
-| `amr supersede <id> ["text"]` | Retire an entry to `archive/superseded.md`, optionally with a replacement. |
+| `amr recall ["error"]` | Failure-triggered recall: the live entry matching a tool error (heredoc/CS1010, shell EOF, Python `SyntaxError`, cp1252 to start), or nothing. Wired as a Claude Code `PostToolUse` (Bash) hook with `--hook`; also runnable by hand. An entry already shown is not re-injected into the same session. |
+| `amr add "text"` | Save a memory. `--project[=name]`, `--file topic`, `--kind`, `--ttl N` days (default 30, or 2 for `state`; `0` = durable), `--durable` to opt out of expiry. Refuses secret-shaped input, warns on session-state detail, and on a near-duplicate points at `amr update <id>` instead of saving a copy. |
+| `amr update <id> "text"` | Replace an entry by id or unique text match, preserving metadata. Rolls the entry's expiry forward (`--ttl N`, `--durable` to change it). |
+| `amr supersede <id> ["text"]` | Retire an entry to `archive/superseded.md`, optionally with a replacement. Provenance-preserving. |
+| `amr delete <id>` (`rm`) | Remove an entry entirely — nothing stays in the tree. Recovery path is git history: `amr search --history "term"`. |
 | `amr used <id...>`, `amr ids` | Credit entries that helped; backfill ids for legacy entries. |
-| `amr search "term"`, `amr index` | Search every memory file; rebuild the `MEMORY.md` index. |
+| `amr search "term"`, `amr index` | Search every memory file (`--history` also greps past commits); rebuild the `MEMORY.md` index. |
 | `amr link`, `amr unlink`, `amr peer`, `amr policy` | Attach sibling repos, teammates' memory repos, and per-repo privacy policy. |
 | `amr remote`, `amr sync` | Show or set the private git remote; pull-rebase and push. |
-| `amr dream` | Health report. `--fix` dedupes, `--compact` archives overflow, `--triage [--apply]` sorts a legacy backlog into keep/rewrite/archive. |
+| `amr dream` | Health report, including per-file digest-budget pressure. `--fix` dedupes, drops or renews expired entries, and queues consolidation proposals past the threshold; `--compact` archives overflow; `--triage [--apply]` sorts a legacy backlog into keep/rewrite/archive. |
 | `amr coverage` | The save-rate metric. Replays transcripts, diffs durable signals against memory, logs a trend, and queues misses. `--judge` accepts `claude`, `codex`, or `env`. |
 | `amr reflect` | The gated Stop hook. `AMR_REFLECT=block` restores the in-session prompt; `AMR_REFLECT_AUTOSAVE=1` lets new adds save directly. |
 | `amr harvest`, `amr discover` | List transcripts, extract normalized user messages, and find hot repos with missing memory. |
 | `amr install`, `amr uninstall` | Merge rules, hooks, and MCP into detected hosts, with backups. Idempotent and reversible. |
-| `amr serve` | stdio MCP server: `memory_context`, `memory_add`, `memory_search`, `memory_update`. |
+| `amr serve` | stdio MCP server: `memory_context`, `memory_add`, `memory_search`, `memory_update`, `memory_delete`. |
 | `amr doctor` | Repo health, PATH, dead config keys, and per-host wiring. |
 
 ## Host wiring
@@ -154,7 +156,7 @@ One memory repo serves every project. Project files live at `projects/<name>-<ha
 - Retrieved memory is data, never instructions.
 - Hooks are bounded and quiet. Install fails closed on unknown hosts and broken configs; runtime hooks fail open so a session is never blocked.
 - Writes are atomic and serialized by `.git/amr.lock`; a write that cannot acquire the lock fails closed instead of racing another writer, and stale locks are broken. Interrupted runs leave a recoverable tree, never a truncated file.
-- Triage and compaction move entries to `archive/`; they do not silently delete them.
+- Triage and compaction move entries to `archive/`; they do not silently delete them. `amr delete` is the explicit hard-delete path and leaves no stub or archive copy.
 
 ## Honest limits
 

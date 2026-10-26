@@ -1,15 +1,25 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import {
+  DEFAULT_TTL_DAYS,
+  addDays,
   commit,
   ensureRepo,
   git,
   isExpired,
+  loadConfig,
   numFlag,
   withLock,
 } from './core.mjs';
-import { backfillIds } from './ids.mjs';
+import { backfillIds, entryId } from './ids.mjs';
 import { cmdTriage } from './triage.mjs';
+import { loadUsage } from './rank.mjs';
+import {
+  CONSOLIDATE_AT,
+  consolidationProposals,
+  liveEntryLines,
+} from './consolidate.mjs';
+import { queueConsolidations } from './pending.mjs';
 
 const out = (s = '') => process.stdout.write(s + '\n');
 const err = (s) => process.stderr.write(s + '\n');
@@ -108,7 +118,7 @@ function collect(home) {
   return { entries, indexLinks };
 }
 
-export function analyze(home, { staleDays = 90 } = {}) {
+export function analyze(home, { staleDays = 90, budget = 0 } = {}) {
   const { entries, indexLinks } = collect(home);
   const files = mdFiles(home).filter((f) => f !== 'MEMORY.md');
   const cutoff = new Date(Date.now() - staleDays * 864e5)
@@ -148,6 +158,26 @@ export function analyze(home, { staleDays = 90 } = {}) {
     : [];
   const memBytes = fs.existsSync(mem) ? fs.statSync(mem).size : 0;
 
+  // Digest pressure per injectable file (globals + projects): share of
+  // the context char budget its live entries would consume.
+  const fills = [];
+  if (budget > 0) {
+    const pdir = path.join(home, 'projects');
+    const injectable = [
+      'MEMORY.md',
+      ...(fs.existsSync(pdir)
+        ? fs
+            .readdirSync(pdir, { withFileTypes: true })
+            .filter((e) => e.isFile() && e.name.endsWith('.md'))
+            .map((e) => `projects/${e.name}`)
+        : []),
+    ];
+    for (const rel of injectable) {
+      const chars = liveEntryLines(home, rel).reduce((n, l) => n + l.length, 0);
+      if (chars) fills.push({ file: rel, chars, pct: chars / budget });
+    }
+  }
+
   const dirty = git(home, ['status', '--porcelain']).stdout;
 
   return {
@@ -173,6 +203,8 @@ export function analyze(home, { staleDays = 90 } = {}) {
     entriesWithoutDate: noDate,
     deadIndexLinks: deadLinks,
     unindexedFiles: unindexed,
+    fills,
+    budget,
   };
 }
 
@@ -206,6 +238,8 @@ export function cmdDream(flags) {
   if (flags.triage) return cmdTriage(flags);
   const home = ensureRepo();
   const staleDays = numFlag(flags.days ?? '90', 90);
+  const cfg = loadConfig(home);
+  const budget = numFlag(flags.budget, cfg.contextBudget ?? 0);
 
   // --if-stale N: run only when the last dream is older than N days
   if (flags['if-stale'] !== undefined) {
@@ -223,7 +257,7 @@ export function cmdDream(flags) {
       err(`${FRAMES[spinI++ % FRAMES.length]} ${suffix}`);
   };
   try {
-  const report = analyze(home, { staleDays });
+  const report = analyze(home, { staleDays, budget });
   moon('dreaming…');
 
   if (flags.json) {
@@ -236,6 +270,10 @@ export function cmdDream(flags) {
   out(`  ${s.entries} entries in ${s.files} file(s); MEMORY.md ${s.memoryMdBytes}B/${s.memoryMdLines} lines`);
   if (s.memoryMdBytes > 3072)
     out(`  ! MEMORY.md is large — move detail into topic files`);
+  for (const f of report.fills.filter((x) => x.pct >= CONSOLIDATE_AT))
+    out(
+      `  ! ${f.file} at ${Math.round(f.pct * 100)}% of the ${report.budget}-char digest budget — new entries will rank out of context`
+    );
   if (s.dirtyFiles) out(`  ! ${s.dirtyFiles} uncommitted change(s) present`);
   out(`  exact duplicates   : ${report.exactDups.length}`);
   report.exactDups.forEach((g) => out(`    - ${g.join('  AND  ')}`));
@@ -266,6 +304,9 @@ export function cmdDream(flags) {
   const finish = () => {
 
   // drop exact-duplicate bullets, keeping the first occurrence
+  const usage = loadUsage(home);
+  const nowMs = Date.now();
+  const tidies = []; // [scope, texts] consolidated after the lock releases
   const seen = new Set();
   for (const rel of mdFiles(home)) {
     const abs = path.join(home, rel);
@@ -273,9 +314,23 @@ export function cmdDream(flags) {
     const keep = [];
     let removed = 0;
     let expiredRemoved = 0;
+    let renewed = 0;
     for (const l of lines) {
       if (l.trim().startsWith('- ') && !l.includes('[[')) {
         if (isExpired(l)) {
+          // An expired entry that earned a recent `amr used` proved it is
+          // still load-bearing: renew its TTL instead of dropping it.
+          const u = usage[entryId(l)];
+          if (u && nowMs - u.last < 90 * 864e5) {
+            renewed++;
+            keep.push(
+              l.replace(
+                /expires:\s*\d{4}-\d{2}-\d{2}/,
+                `expires: ${addDays(numFlag(cfg.defaultTtlDays, DEFAULT_TTL_DAYS))}`
+              )
+            );
+            continue;
+          }
           expiredRemoved++;
           continue;
         }
@@ -288,13 +343,28 @@ export function cmdDream(flags) {
       }
       keep.push(l);
     }
-    if (removed || expiredRemoved) {
+    if (removed || expiredRemoved || renewed) {
       atomicWrite(abs, keep.join('\n').replace(/\n{3,}/g, '\n\n'));
       touched.add(rel);
       if (removed) changed.push(`${rel}: removed ${removed} duplicate(s)`);
       if (expiredRemoved)
-        changed.push(`${rel}: dropped ${expiredRemoved} expired state entr${expiredRemoved === 1 ? 'y' : 'ies'}`);
+        changed.push(`${rel}: dropped ${expiredRemoved} expired entr${expiredRemoved === 1 ? 'y' : 'ies'}`);
+      if (renewed)
+        changed.push(`${rel}: renewed ${renewed} expired entr${renewed === 1 ? 'y' : 'ies'} (marked used recently)`);
     }
+  }
+
+  // Budget pressure: queue merge/delete proposals for files past the
+  // consolidation threshold so the next session can act on them.
+  const consolidateAt = cfg.consolidateAt ?? CONSOLIDATE_AT;
+  for (const f of report.fills) {
+    if (f.pct < consolidateAt) continue;
+    const props = consolidationProposals(home, f.file, report.budget);
+    if (!props.length) continue;
+    const scope =
+      f.file === 'MEMORY.md' ? null : f.file.replace(/^projects\/|\.md$/g, '');
+    tidies.push([scope, props]);
+    changed.push(`${f.file}: queued ${props.length} consolidation proposal(s)`);
   }
 
   const ids = backfillIds(home);
@@ -391,16 +461,20 @@ export function cmdDream(flags) {
 
   if (!changed.length) {
     touchDream(home);
-    return out('nothing mechanical to fix');
+    out('nothing mechanical to fix');
+    return tidies;
   }
-  const ok = commit(home, [...touched], 'Dream: mechanical cleanup');
+  // Proposals alone touch no live files; commit only when files moved.
+  const ok = touched.size ? commit(home, [...touched], 'Dream: mechanical cleanup') : true;
   // Stamp only after a successful commit — a failed/interrupted run
   // must not count as dreamt for --if-stale.
   if (ok) touchDream(home);
   changed.forEach((c) => out(`  ${c}`));
   if (!ok) err('commit failed; fixes left uncommitted in working tree');
+  return tidies;
   };
-  withLock(home, finish);
+  const tidies = withLock(home, finish) || [];
+  for (const [scope, texts] of tidies) queueConsolidations(home, scope, texts);
   if (flags.inline && !flags.json) err('💤 dreamt.');
   } finally {
     spinDone();

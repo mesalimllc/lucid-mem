@@ -62,7 +62,8 @@ export function nearDuplicate(text, lines) {
 
 // "- [reflect] 2026-10-24 add pitfall project: text"
 // "- [reflect] 2026-10-24 update a3f9: text"
-const ITEM = /^- \[reflect\] (\d{4}-\d{2}-\d{2}) (.+?): (.*)$/;
+// "- [consolidate] 2026-10-26 tidy scope=slug: merge a3f9 into b2c1 ..."
+const ITEM = /^- \[(?:reflect|consolidate)\] (\d{4}-\d{2}-\d{2}) (.+?): (.*)$/;
 
 function readItems(abs) {
   if (!fs.existsSync(abs)) return [];
@@ -116,14 +117,44 @@ export function queueReflections(home, proposals, now = today(), scope = null) {
   });
 }
 
-// Drop queued proposals that a just-saved entry now covers. Called from
-// add/update while their lock is already released.
-export function drainReflections(home, savedText) {
+// Budget-pressure proposals queued by `amr add`/`amr dream` when a file
+// crosses the consolidation threshold. `texts` are ready-made suggestion
+// strings; duplicates of queued items are skipped.
+export function queueConsolidations(home, scope, texts, now = today()) {
+  const abs = path.join(home, PENDING_REFLECTIONS);
+  return withLock(home, () => {
+    const items = readItems(abs).filter((i) => fresh(i.date, now));
+    let queued = 0;
+    for (const t of texts) {
+      const text = String(t).replace(/\s+/g, ' ').trim();
+      if (!text || items.some((i) => i.text === text)) continue;
+      const head = `tidy${scope ? ` scope=${scope}` : ''}`;
+      items.push({
+        line: `- [consolidate] ${now} ${head}: ${text}`,
+        date: now,
+        text,
+      });
+      queued++;
+    }
+    writeItems(abs, items.slice(-MAX_ITEMS));
+    return queued;
+  });
+}
+
+// Drop queued proposals that a just-saved entry now covers, or that point
+// at ids a delete/supersede just removed. Called from add/update/delete/
+// supersede while their lock is already released.
+export function drainReflections(home, savedText, deadIds = []) {
   const abs = path.join(home, PENDING_REFLECTIONS);
   if (!fs.existsSync(abs)) return;
+  const dead = deadIds.filter(Boolean).map((id) => new RegExp(`\\b${id}\\b`));
   withLock(home, () => {
     const items = readItems(abs);
-    const kept = items.filter((i) => similarity(i.text, savedText) < SIMILAR);
+    const kept = items.filter(
+      (i) =>
+        similarity(i.text, savedText) < SIMILAR &&
+        !dead.some((re) => re.test(i.line))
+    );
     if (kept.length !== items.length) writeItems(abs, kept);
   });
 }

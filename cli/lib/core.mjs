@@ -327,7 +327,8 @@ export function projectEntry(cfg, { slug, name }) {
 }
 
 // Entry kinds. `state` is session-scoped (what is open, what was just
-// committed) and expires; everything else is durable knowledge.
+// committed) and expires in STATE_TTL_DAYS; other kinds expire in
+// DEFAULT_TTL_DAYS unless saved with --durable.
 export const KINDS = ['pitfall', 'decision', 'preference', 'fact', 'howto', 'state'];
 export const STATE_TTL_DAYS = 2;
 
@@ -359,3 +360,19 @@ export const isExpired = (line, now = today()) => {
   const d = (trailingMeta(line).match(/expires:\s*(\d{4}-\d{2}-\d{2})/) || [])[1];
   return !!d && d < now;
 };
+
+// Entries get a TTL by default: 30 days for durable-looking kinds,
+// STATE_TTL_DAYS for session state. An entry without `expires:` is
+// durable forever (legacy entries, `--durable`, `--ttl 0`).
+export const DEFAULT_TTL_DAYS = 30;
+
+// Tokenize entry/prose text for overlap scoring: lowercase words of
+// 3+ chars, entry meta bracket stripped so `id:`/`kind:` never match.
+export const entryTokens = (s) =>
+  new Set(
+    String(s)
+      .toLowerCase()
+      .replace(/\[[^\]]*\]\s*$/, '')
+      .split(/[^a-z0-9]+/)
+      .filter((w) => w.length >= 3)
+  );

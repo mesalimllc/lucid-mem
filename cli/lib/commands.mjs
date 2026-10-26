@@ -18,9 +18,11 @@ import {
   looksSecret,
   normName,
   projectEntry,
+  entryTokens,
   KINDS,
   numFlag,
   STATE_TTL_DAYS,
+  DEFAULT_TTL_DAYS,
   addDays,
   episodicHits,
   isExpired,
@@ -35,7 +37,8 @@ import {
 } from './core.mjs';
 import { DEFAULT_BUDGET, bumpUsage, loadUsage, pickWithinBudget } from './rank.mjs';
 import { ID_RE, entryId, findById, newId, scanIds } from './ids.mjs';
-import { drainReflections, nearDuplicate, pendingReflectionLines } from './pending.mjs';
+import { drainReflections, nearDuplicate, pendingReflectionLines, queueConsolidations } from './pending.mjs';
+import { CONSOLIDATE_AT, budgetFill, consolidationProposals } from './consolidate.mjs';
 
 const out = (s = '') => process.stdout.write(s + '\n');
 const err = (s) => process.stderr.write(s + '\n');
@@ -267,6 +270,62 @@ function emitContext(home, text, flags, payload) {
   out(text);
 }
 
+// The work signal: tokens describing what this session is actually
+// touching — project name, cwd path tail, current branch, recently
+// committed and dirty files, and (for resumed/compacted sessions) the
+// last user text from the transcript. Entries sharing these tokens rank
+// higher in the digest, so the budget goes to relevant memory instead of
+// a flat dump. All signals are cheap local reads; failures just yield
+// fewer tokens.
+function workSignalTokens(cwd, proj, attachNames, payload) {
+  const parts = [];
+  if (proj) parts.push(proj.name, proj.slug);
+  parts.push(...attachNames);
+  const segs = String(cwd).split(/[\\/]+/).filter(Boolean);
+  parts.push(...segs.slice(-3));
+  const top = proj?.toplevel || cwd;
+  if (fs.existsSync(top)) {
+    const br = git(top, ['rev-parse', '--abbrev-ref', 'HEAD'], { timeout: 3000 });
+    if (br.code === 0) parts.push(br.stdout);
+    const log = git(top, ['log', '-8', '--name-only', '--format=%s'], { timeout: 3000 });
+    if (log.code === 0) parts.push(log.stdout);
+    const st = git(top, ['status', '--porcelain'], { timeout: 3000 });
+    if (st.code === 0)
+      parts.push(st.stdout.replace(/^.. /gm, ''));
+  }
+  const tp = payload?.transcript_path;
+  if (tp) {
+    try {
+      const stat = fs.statSync(tp);
+      const fd = fs.openSync(tp, 'r');
+      const size = Math.min(stat.size, 65536);
+      const buf = Buffer.alloc(size);
+      fs.readSync(fd, buf, 0, size, Math.max(0, stat.size - size));
+      fs.closeSync(fd);
+      const userBits = [];
+      for (const line of buf.toString('utf8').split('\n')) {
+        if (!line.includes('"user"')) continue;
+        try {
+          const o = JSON.parse(line);
+          if (o?.message?.role !== 'user') continue;
+          const c = o.message.content;
+          const t =
+            typeof c === 'string'
+              ? c
+              : Array.isArray(c)
+                ? c.map((x) => x?.text || '').join(' ')
+                : '';
+          if (t) userBits.push(t);
+        } catch {}
+      }
+      parts.push(userBits.slice(-4).join(' ').slice(-3000));
+    } catch {}
+  }
+  const prompt = payload?.prompt || payload?.user_prompt;
+  if (typeof prompt === 'string') parts.push(prompt);
+  return entryTokens(parts.join(' '));
+}
+
 export function cmdContext(flags) {
   const home = ensureRepo();
   if (hasRemote(home)) pullFfOnly(home, 2000);
@@ -304,9 +363,10 @@ export function cmdContext(flags) {
   // budget across sections (see rank.mjs).
   let remaining = numFlag(flags.budget, cfg.contextBudget ?? DEFAULT_BUDGET);
   const usage = loadUsage(home);
+  let signal = null;
   const cap = (arr, n) => {
     if (full) return arr;
-    const picked = pickWithinBudget(arr, n, remaining, usage, (l) => episodicHits(l).length > 0);
+    const picked = pickWithinBudget(arr, n, remaining, usage, (l) => episodicHits(l).length > 0, signal);
     remaining -= picked.chars;
     if (picked.clipped && picked.items.length === arr.length) return picked.items;
     return picked.items.length === arr.length
@@ -363,6 +423,8 @@ export function cmdContext(flags) {
     push(slug, true);
     if (e?.links) queue.push(...e.links.map((l) => ({ k: l })));
   }
+
+  signal = workSignalTokens(cwd, proj, attach.map((a) => a.name), hookPayload);
 
   // Budget allocation order (display order below is unchanged):
   // current/linked project entries first, then the pooled digest of
@@ -423,7 +485,7 @@ export function cmdContext(flags) {
   if (items.length)
     lines.push(
       '',
-      '## Pending memory candidates (unsaved — review, `amr add` / `amr update <id>` the real ones)',
+      '## Pending memory candidates (unsaved — review, `amr add` / `amr update <id>` / `amr delete <id>` the real ones)',
       items.join('\n')
     );
   if (indexLinks.length) lines.push('', '## Index', indexLinks.join('\n'));
@@ -526,11 +588,18 @@ function targetFile(home, flags) {
   };
 }
 
-function buildEntry(text, flags, proj, id) {
+function buildEntry(text, flags, proj, id, cfg = {}) {
   const meta = [`added: ${today()}`];
   if (flags.kind) meta.push(`kind: ${flags.kind}`);
+  // TTL by default: everything expires (state in days, the rest in
+  // DEFAULT_TTL_DAYS / cfg.defaultTtlDays) unless --durable or --ttl 0.
+  // Entries without an `expires:` field are durable forever.
   if (flags.kind === 'state')
     meta.push(`expires: ${addDays(numFlag(flags.ttl, STATE_TTL_DAYS))}`);
+  else if (!flags.durable) {
+    const ttl = numFlag(flags.ttl ?? cfg.defaultTtlDays, DEFAULT_TTL_DAYS);
+    if (ttl > 0) meta.push(`expires: ${addDays(ttl)}`);
+  }
   if (proj) meta.push(`project: ${proj.name}`);
   if (id) meta.push(`id: ${id}`);
   return `- ${text.replace(/\s+/g, ' ').trim()} [${meta.join('; ')}]`;
@@ -549,6 +618,7 @@ export function cmdAdd(text, flags) {
   }
   if (flags.kind && !KINDS.includes(flags.kind))
     throw new Error(`unknown kind "${flags.kind}"; use one of ${KINDS.join('|')}`);
+  const cfg = loadConfig(home);
   const t = targetFile(home, flags);
   const isNew = !fs.existsSync(t.abs);
   const created = isNew && t.rel !== 'MEMORY.md';
@@ -575,7 +645,7 @@ export function cmdAdd(text, flags) {
       fs.writeFileSync(t.abs, `${t.title}\n`);
     }
     newEntryId = newId(scanIds(home));
-    insertEntry(t.abs, buildEntry(text, flags, t.proj, newEntryId), {
+    insertEntry(t.abs, buildEntry(text, flags, t.proj, newEntryId, cfg), {
       beforeIndex: t.beforeIndex,
     });
     const files = [t.rel];
@@ -605,6 +675,22 @@ export function cmdAdd(text, flags) {
       err(
         `warning: entry looks like session state (${hits.join(', ')}); it will go stale. Prefer "When X, do Y, because Z", or re-save with --kind state (expires in ${STATE_TTL_DAYS}d).`
       );
+    // Budget pressure: once a file's live entries approach the digest
+    // budget, new writes stop being seen. Propose merges instead of
+    // letting the next save hit the wall; proposals land in the pending
+    // queue so the next session sees them too.
+    const budget = numFlag(flags.budget, cfg.contextBudget ?? DEFAULT_BUDGET);
+    const fill = budgetFill(home, t.rel, budget);
+    if (fill.pct >= (cfg.consolidateAt ?? CONSOLIDATE_AT)) {
+      const props = consolidationProposals(home, t.rel, budget);
+      err(
+        `${t.rel} at ${Math.round(fill.pct * 100)}% of the ${budget}-char digest budget`
+      );
+      if (props.length) {
+        queueConsolidations(home, t.proj?.slug ?? null, props);
+        for (const p of props.slice(0, 3)) err(`  consolidate: ${p}`);
+      }
+    }
   }
 }
 
@@ -640,10 +726,25 @@ export function cmdUpdate(match, text, flags) {
     return;
   }
   const { l, i } = hits[0];
+  const cfg = loadConfig(home);
   const keptMeta = (l.match(/(\[[^\]]*\])+\s*$/) || [''])[0];
-  const stripped = keptMeta.replace(/;?\s*updated:[^;\]]*/g, '');
+  // Updating proves the entry is still relevant, so its TTL rolls forward.
+  // --durable or --ttl 0 drops expiry; --ttl N sets an explicit span; a
+  // durable entry (no expires:) stays durable unless --ttl is passed.
+  const hadExpiry = /expires:\s*\d{4}-\d{2}-\d{2}/.test(keptMeta);
+  const stripped = keptMeta.replace(/;?\s*(?:updated|expires):[^;\]]*/g, '');
+  let exp = null;
+  if (!flags.durable) {
+    const ttl =
+      flags.ttl !== undefined
+        ? numFlag(flags.ttl, 0)
+        : hadExpiry
+          ? numFlag(cfg.defaultTtlDays, DEFAULT_TTL_DAYS)
+          : 0;
+    if (ttl > 0) exp = addDays(ttl);
+  }
   const meta = keptMeta
-    ? ` ${stripped.replace(/\]$/, `; updated: ${today()}]`)}`
+    ? ` ${stripped.replace(/\]$/, `${exp ? `; expires: ${exp}` : ''}; updated: ${today()}]`)}`
     : ` [updated: ${today()}]`;
   lines[i] = `- ${text.replace(/\s+/g, ' ').trim()}${meta}`;
   withLock(home, () => {
@@ -656,13 +757,36 @@ export function cmdUpdate(match, text, flags) {
   out(`updated ${t.rel}${eid ? ` [id ${eid}]` : ''}`);
 }
 
-export function cmdSearch(term) {
+export function cmdSearch(term, flags = {}) {
   const home = ensureRepo();
   const r = git(home, ['grep', '-n', '-i', '--', term]);
-  if (r.code !== 0 || !r.stdout) out('no matches');
+  let found = r.code === 0 && r.stdout ? r.stdout : '';
+  // --history also greps past commits, so deleted and superseded entries
+  // stay findable after leaving the tree. Bounded to recent history.
+  if (flags.history) {
+    const revs = git(home, ['rev-list', '--all', '-n', '200']);
+    if (revs.code === 0 && revs.stdout) {
+      const list = revs.stdout.split('\n').filter(Boolean);
+      const g = git(home, ['grep', '-n', '-i', '--', term, ...list]);
+      if (g.code === 0 && g.stdout) {
+        const seen = new Set();
+        const rows = [];
+        for (const l of g.stdout.split('\n')) {
+          // "<rev>:<file>:<n>:<line>" -> dedupe on file+line text
+          const key = l.replace(/^[0-9a-f]{7,40}:/, '');
+          if (seen.has(key)) continue;
+          seen.add(key);
+          rows.push(l.replace(/^([0-9a-f]{40}):/, (m) => `${m.slice(0, 7)}:`));
+        }
+        if (rows.length)
+          found += `${found ? '\n' : ''}# git history\n${rows.join('\n')}`;
+      }
+    }
+  }
+  if (!found) out('no matches');
   // Surfacing is not using: counting search hits would keep promoting
   // whatever already matches common terms. Only `amr used` ranks entries.
-  else out(r.stdout);
+  else out(found);
 }
 
 // amr used <id...> — mark entries that actually helped.

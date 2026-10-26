@@ -149,7 +149,7 @@ test('--kind state gets an expiry; expired entries drop from context and dream -
   assert.doesNotMatch(run(['context'], { amrHome }).stdout, /PR 12 is open/);
   assert.match(run(['search', 'PR 12'], { amrHome }).stdout, /PR 12 is open/);
   const d = run(['dream', '--fix'], { amrHome });
-  assert.match(d.stdout, /dropped 1 expired state entry/);
+  assert.match(d.stdout, /dropped 1 expired entry/);
   assert.doesNotMatch(read(mem), /PR 12 is open/);
 });
 

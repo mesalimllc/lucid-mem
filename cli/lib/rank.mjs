@@ -7,7 +7,7 @@
 
 import fs from 'node:fs';
 import path from 'node:path';
-import { entryKind } from './core.mjs';
+import { entryKind, entryTokens } from './core.mjs';
 import { entryId } from './ids.mjs';
 
 export const DEFAULT_BUDGET = 6000; // chars of entries, roughly 1.5k tokens
@@ -60,7 +60,19 @@ const latestDate = (line) => {
   return ds.length ? ds[ds.length - 1] : null;
 };
 
-export function scoreEntry(line, usage = {}, isNoise = () => false, now = Date.now()) {
+// Relevance to the current work: shared tokens between the entry and the
+// session's work signal (project/cwd/branch/recent-commit/transcript
+// tokens built by cmdContext). Long, specific tokens count double;
+// three-char tokens like "mem" or "dev" are too ambient to count.
+const relevanceWeight = (line, signal) => {
+  if (!signal || !signal.size) return 0;
+  let w = 0;
+  for (const t of entryTokens(line))
+    if (signal.has(t)) w += t.length >= 6 ? 2 : t.length >= 4 ? 1 : 0;
+  return Math.min(w, 5);
+};
+
+export function scoreEntry(line, usage = {}, isNoise = () => false, now = Date.now(), signal = null) {
   const kind = entryKind(line);
   let s = KIND_WEIGHT[kind] ?? 1.5;
   const d = latestDate(line);
@@ -69,6 +81,7 @@ export function scoreEntry(line, usage = {}, isNoise = () => false, now = Date.n
   const u = usage[entryId(line)];
   if (u && now - u.last < USAGE_WINDOW_DAYS * 864e5) s *= 1 + 0.5 * Math.log2(1 + u.n);
   if (kind !== 'state' && isNoise(line)) s *= 0.3;
+  s *= 1 + 0.6 * relevanceWeight(line, signal);
   return s;
 }
 
@@ -92,12 +105,12 @@ export function clipEntry(line, cap = FLOOR_ENTRY_CAP) {
 // always kept, clipped when they would not fit, so a section never
 // renders empty but also never exceeds the budget by more than the
 // floor cap allows.
-export function pickWithinBudget(arr, maxCount, budget, usage, isNoise) {
+export function pickWithinBudget(arr, maxCount, budget, usage, isNoise, signal = null) {
   // One clock reading for the whole pass: per-entry Date.now() calls put
   // equal-score entries a millisecond apart, so ties broke by timing.
   const now = Date.now();
   const ranked = arr
-    .map((line, i) => ({ line, i, s: scoreEntry(line, usage, isNoise, now) }))
+    .map((line, i) => ({ line, i, s: scoreEntry(line, usage, isNoise, now, signal) }))
     .sort((a, b) => b.s - a.s || b.i - a.i);
   const chosen = [];
   let chars = 0;

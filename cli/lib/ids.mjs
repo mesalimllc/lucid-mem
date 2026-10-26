@@ -6,14 +6,19 @@ import crypto from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
 import {
+  DEFAULT_TTL_DAYS,
+  addDays,
   commit,
   ensureRepo,
   git,
   hasRemote,
+  loadConfig,
+  numFlag,
   today,
   trailingMeta,
   withLock,
 } from './core.mjs';
+import { drainReflections } from './pending.mjs';
 
 const out = (s = '') => process.stdout.write(s + '\n');
 const err = (s) => process.stderr.write(s + '\n');
@@ -113,6 +118,32 @@ export function cmdIds() {
   out(n ? `assigned ids to ${n} entr${n === 1 ? 'y' : 'ies'} in ${touched.length} file(s)` : 'all entries already have ids');
 }
 
+// amr delete <id> — a real delete: the entry leaves the tree entirely.
+// No archive copy (that is what supersede is for); the committed git
+// history is the recovery path (`amr search --history <term>`).
+export function cmdDelete(id) {
+  const home = ensureRepo();
+  if (!ID_RE.test(id)) throw new Error('usage: amr delete <id>');
+  const rel = withLock(home, () => {
+    const hit = findById(home, id);
+    if (!hit) return null;
+    const abs = path.join(home, hit.rel);
+    const lines = fs.readFileSync(abs, 'utf8').split(/\r?\n/);
+    lines.splice(hit.line, 1);
+    fs.writeFileSync(abs, lines.join('\n').replace(/\n{3,}/g, '\n\n'));
+    commit(home, [hit.rel], `Delete memory ${id}`);
+    return hit.rel;
+  });
+  if (!rel) {
+    err(`no entry with id ${id}`);
+    process.exitCode = 1;
+    return;
+  }
+  drainReflections(home, '', [id]);
+  if (hasRemote(home)) git(home, ['push'], { timeout: 10000 });
+  out(`deleted ${id} from ${rel} (history keeps it: amr search --history "term")`);
+}
+
 // amr supersede <id> ["replacement"] — retire an entry. The old line moves
 // to archive/superseded.md (searchable, never injected); an optional
 // replacement is saved in the same file with `supersedes: <id>`.
@@ -131,6 +162,12 @@ export function cmdSupersede(id, text) {
       const proj = (old.match(/project:\s*([^;\]]+)/) || [])[1];
       const meta = [`added: ${today()}`];
       if (kind) meta.push(`kind: ${kind}`);
+      // A replacement of a TTL'd entry gets a fresh TTL, same as an
+      // update; replacing a durable entry stays durable.
+      if (/expires:\s*\d{4}-\d{2}-\d{2}/.test(old))
+        meta.push(
+          `expires: ${addDays(numFlag(loadConfig(home).defaultTtlDays, DEFAULT_TTL_DAYS))}`
+        );
       if (proj) meta.push(`project: ${proj.trim()}`);
       meta.push(`supersedes: ${id}`, `id: ${newid}`);
       lines[hit.line] = `- ${text.replace(/\s+/g, ' ').trim()} [${meta.join('; ')}]`;
@@ -151,6 +188,7 @@ export function cmdSupersede(id, text) {
     process.exitCode = 1;
     return;
   }
+  drainReflections(home, '', [id]);
   if (hasRemote(home)) git(home, ['push'], { timeout: 10000 });
   out(
     result.newid
