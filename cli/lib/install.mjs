@@ -65,6 +65,12 @@ const hermesHome = () =>
 // Meta Muse Code config root: XDG with a home fallback on every OS
 // (Windows uses %USERPROFILE%\.config\muse, never AppData).
 const museConfigDir = () => path.join(xdgConfigHome, 'muse');
+// Devin CLI user config: %APPDATA%\devin\config.json on Windows,
+// ~/.config/devin/config.json elsewhere. Holds hooks and MCP servers.
+const devinConfigFile = () =>
+  process.platform === 'win32'
+    ? path.join(appdata, 'devin', 'config.json')
+    : path.join(xdgConfigHome, 'devin', 'config.json');
 
 const HOSTS = {
   cursor: {
@@ -119,11 +125,15 @@ const HOSTS = {
     ],
   },
   devin: {
+    // Devin CLI user config holds Claude-Code-compatible hooks plus
+    // mcpServers. Hooks fire with Claude-shaped stdin; SessionStart
+    // stdout injects context.
     detect: () =>
       !!firstExisting([
         path.join(appdata, 'devin'),
         path.join(home, '.config', 'devin'),
       ]),
+    devinConfig: () => devinConfigFile(),
     rules: () => [
       {
         path:
@@ -685,6 +695,71 @@ function unmergeMuseSettings(file) {
   return changed;
 }
 
+// Devin CLI user config carries hooks and MCP servers together.
+// Hook shape matches Claude Code (SessionStart stdout injects context;
+// PostToolUse recall is silent unless the error matches a known
+// pitfall, so no matcher — Devin's shell tool is `exec`, but an
+// unmatched recall firing costs nothing). No PostToolUseFailure:
+// Devin's documented events end at PostToolUse.
+const DEVIN_HOOK_ENTRIES = [
+  ...HOOK_ENTRIES.map(([e, s]) => [
+    e[0].toUpperCase() + e.slice(1),
+    e === 'sessionStart' ? 'context --hook' : s,
+  ]),
+  ['PostToolUse', 'recall --hook'],
+  ['Stop', 'reflect'],
+];
+
+function mergeDevinSettings(file) {
+  let cfg = {};
+  if (fs.existsSync(file)) {
+    try {
+      cfg = JSON.parse(fs.readFileSync(file, 'utf8'));
+    } catch {
+      throw new Error(`cannot parse ${file}; leaving it untouched`);
+    }
+  }
+  const added = mergeHooksIntoCfg(cfg, DEVIN_HOOK_ENTRIES);
+  let changed = added.length > 0;
+  cfg.mcpServers ||= {};
+  let mcp = false;
+  if (!cfg.mcpServers['agent-memory']) {
+    cfg.mcpServers['agent-memory'] = {
+      command: 'node',
+      args: [CLI_ENTRY, 'serve'],
+    };
+    mcp = true;
+    changed = true;
+  }
+  if (changed) {
+    backup(file);
+    fs.mkdirSync(path.dirname(file), { recursive: true });
+    fs.writeFileSync(file, JSON.stringify(cfg, null, 2) + '\n');
+  }
+  return { hooks: added, mcp };
+}
+
+function unmergeDevinSettings(file) {
+  if (!fs.existsSync(file)) return false;
+  let cfg;
+  try {
+    cfg = JSON.parse(fs.readFileSync(file, 'utf8'));
+  } catch {
+    return false;
+  }
+  let changed = unmergeHooksFromCfg(cfg);
+  if (cfg.mcpServers?.['agent-memory']) {
+    delete cfg.mcpServers['agent-memory'];
+    if (!Object.keys(cfg.mcpServers).length) delete cfg.mcpServers;
+    changed = true;
+  }
+  if (changed) {
+    backup(file);
+    fs.writeFileSync(file, JSON.stringify(cfg, null, 2) + '\n');
+  }
+  return changed;
+}
+
 function stampBlock(file, content, { append }) {
   fs.mkdirSync(path.dirname(file), { recursive: true });
   if (!fs.existsSync(file)) {
@@ -838,6 +913,22 @@ export function cmdInstall(flags) {
       if (h.museSettings) {
         const file = h.museSettings();
         const res = mergeMuseSettings(file);
+        did.push(
+          res.hooks.length
+            ? `hooks +${res.hooks.join(',')} in ${file}`
+            : `hooks already wired in ${file}`
+        );
+        did.push(
+          res.mcp === true
+            ? `mcp +agent-memory in ${file}`
+            : res.mcp === false
+            ? `mcp already wired in ${file}`
+            : `mcp ${res.mcp}: ${file}`
+        );
+      }
+      if (h.devinConfig) {
+        const file = h.devinConfig();
+        const res = mergeDevinSettings(file);
         did.push(
           res.hooks.length
             ? `hooks +${res.hooks.join(',')} in ${file}`
@@ -1028,6 +1119,8 @@ export function cmdUninstall(flags) {
         did.push(`mcp entry removed from ${h.mcpZed()}`);
       if (h.museSettings && unmergeMuseSettings(h.museSettings()))
         did.push(`hooks+mcp removed from ${h.museSettings()}`);
+      if (h.devinConfig && unmergeDevinSettings(h.devinConfig()))
+        did.push(`hooks+mcp removed from ${h.devinConfig()}`);
       if (h.configYaml) {
         if (unmergeMcpYaml(h.configYaml()))
           did.push(`mcp entry removed from ${h.configYaml()}`);
@@ -1051,12 +1144,14 @@ function hostWired(name) {
     if (h.hooksJson && has(h.hooksJson(), 'amr')) return 'wired';
     if (h.settingsJson && has(h.settingsJson(), 'amr')) return 'wired';
     if (h.museSettings && has(h.museSettings(), 'amr')) return 'wired';
+    if (h.devinConfig && has(h.devinConfig(), 'amr')) return 'wired';
     const mcp =
       (h.mcpJson && has(h.mcpJson(), 'agent-memory')) ||
       (h.mcpToml && has(h.mcpToml(), 'agent-memory')) ||
       (h.mcpOpencode && has(h.mcpOpencode(), 'agent-memory')) ||
       (h.configYaml && has(h.configYaml(), 'agent-memory')) ||
       (h.museSettings && has(h.museSettings(), 'agent-memory')) ||
+      (h.devinConfig && has(h.devinConfig(), 'agent-memory')) ||
       (h.mcpZed && has(h.mcpZed(), 'agent-memory'));
     if (h.rules && h.rules().some((r) => has(r.path, MARK_BEGIN) || has(r.path, LEGACY_MARK_BEGIN)))
       return mcp ? 'wired (rules+mcp)' : 'wired (rules only)';

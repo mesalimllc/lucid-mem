@@ -121,7 +121,7 @@ amr sync
 | Cursor | `.cursor/rules/lucid-mem.mdc` | `sessionStart`/`sessionEnd` | `mcp.json` |
 | Claude Code | `~/.claude/CLAUDE.md` | `SessionStart`/`SessionEnd`, `Stop` reflect | `~/.claude.json` |
 | Windsurf | `global_rules.md` | `sessionStart`/`sessionEnd` | `mcp_config.json` |
-| Devin CLI | `devin/AGENTS.md` | - | - |
+| Devin CLI | `devin/AGENTS.md` | `SessionStart` context, `PostToolUse` recall, `Stop` reflect, `SessionEnd` sync/dream/coverage in the user `config.json` | user `config.json` (`mcpServers`) |
 | Copilot CLI | `~/.copilot/AGENTS.md` | - | - |
 | Codex | `~/.codex/AGENTS.md` | - | `config.toml` |
 | Cline | `~/Documents/Cline/Rules/`, `~/.cline/AGENTS.md` | - | `~/.cline/mcp.json` |

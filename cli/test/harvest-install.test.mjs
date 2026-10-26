@@ -209,6 +209,37 @@ test('install --host muse fails closed when settings.json has both MCP maps', ()
   assert.equal(read(settings), before);
 });
 
+test('install --host devin wires hooks and MCP into the user config; uninstall removes them', () => {
+  const home = tmpdir();
+  const fakeHome = tmpdir();
+  run(['ensure'], { amrHome: home });
+  const devinDir =
+    process.platform === 'win32'
+      ? path.join(fakeHome, 'AppData', 'Roaming', 'devin')
+      : path.join(fakeHome, '.config', 'devin');
+  fs.mkdirSync(devinDir, { recursive: true });
+  const config = path.join(devinDir, 'config.json');
+  fs.writeFileSync(config, JSON.stringify({ permissions: { allow: ['Read(**)'] } }));
+  const r = run(['install', '--host', 'devin'], { amrHome: home, fakeHome });
+  assert.equal(r.status, 0, r.stderr);
+  const cfg = JSON.parse(read(config));
+  assert.deepEqual(cfg.permissions, { allow: ['Read(**)'] });
+  const hookCmds = (ev) => (cfg.hooks?.[ev] || []).flatMap((e) => (e.hooks || []).map((h) => h.command));
+  assert.ok(hookCmds('SessionStart').some((c) => c.includes('context --hook')));
+  assert.ok(hookCmds('PostToolUse').some((c) => c.includes('recall --hook')));
+  assert.ok(hookCmds('Stop').some((c) => c.includes('reflect')));
+  assert.ok(cfg.mcpServers['agent-memory'].args.some((a) => a.endsWith('amr.mjs')));
+  const r2 = run(['install', '--host', 'devin'], { amrHome: home, fakeHome });
+  assert.equal(r2.status, 0, r2.stderr);
+  assert.equal(JSON.stringify(JSON.parse(read(config)).mcpServers).match(/agent-memory/g).length, 1);
+  const u = run(['uninstall', '--host', 'devin'], { amrHome: home, fakeHome });
+  assert.equal(u.status, 0, u.stderr);
+  const after = JSON.parse(read(config));
+  assert.deepEqual(after.permissions, { allow: ['Read(**)'] });
+  assert.ok(!JSON.stringify(after).includes('agent-memory'));
+  assert.ok(!JSON.stringify(after.hooks || {}).includes('amr.mjs'));
+});
+
 test('install --host codex writes rules + mcp into a fake home, idempotent', () => {
   const home = tmpdir();
   const fakeHome = tmpdir();
