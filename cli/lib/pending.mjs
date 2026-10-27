@@ -10,13 +10,24 @@ import path from 'node:path';
 import { today, withLock } from './core.mjs';
 
 export const PENDING_REFLECTIONS = path.join('dreams', 'pending-reflections.md');
+// Overflow and age-out evictions land here instead of being deleted, so
+// a proposal the queue drops before any session reviewed it can still be
+// rescued with `amr add`. Trim reviewed lines by hand when done.
+export const REFLECTION_ARCHIVE = path.join('dreams', 'reflection-archive.md');
 const MAX_ITEMS = 15;
 const MAX_AGE_DAYS = 14;
+const MAX_ARCHIVED = 200;
 const SIMILAR = 0.8;
 const HEADER = [
   '# Pending reflections',
   '',
   'Background-judge proposals, unsaved. Review: `amr add` / `amr update <id>` the real ones; ignore the rest.',
+  '',
+];
+const ARCHIVE_HEADER = [
+  '# Archived reflections',
+  '',
+  'Proposals the pending queue evicted (overflow past 15 items, or older than a fortnight) before any session reviewed them. Rescue the real ones with `amr add` / `amr update <id>`, then delete the line.',
   '',
 ];
 
@@ -93,12 +104,44 @@ function writeItems(abs, items) {
 
 const fresh = (date, now) => (Date.parse(now) - Date.parse(date)) / 864e5 <= MAX_AGE_DAYS;
 
+// Evicted queue items are appended here (exact-line deduped, newest 200
+// kept) instead of being deleted. Runs inside the caller's lock.
+function archiveItems(home, items) {
+  if (!items.length) return;
+  const abs = path.join(home, REFLECTION_ARCHIVE);
+  const have = new Set(
+    fs.existsSync(abs) ? fs.readFileSync(abs, 'utf8').split(/\r?\n/) : []
+  );
+  const lines = items.map((i) => i.line).filter((l) => !have.has(l));
+  if (!lines.length) return;
+  const prev = fs.existsSync(abs)
+    ? fs.readFileSync(abs, 'utf8').split(/\r?\n/).filter((l) => ITEM.test(l))
+    : [];
+  const kept = [...prev, ...lines].slice(-MAX_ARCHIVED);
+  fs.mkdirSync(path.dirname(abs), { recursive: true });
+  fs.writeFileSync(abs, [...ARCHIVE_HEADER, ...kept].join('\n') + '\n');
+}
+
+// Fresh (unexpired) archived lines, for the `amr context` pointer.
+export function archivedReflectionCount(home, now = today()) {
+  const abs = path.join(home, REFLECTION_ARCHIVE);
+  if (!fs.existsSync(abs)) return 0;
+  return fs
+    .readFileSync(abs, 'utf8')
+    .split(/\r?\n/)
+    .map((l) => l.match(ITEM))
+    .filter((m) => m && fresh(m[1], now)).length;
+}
+
 // proposals: [{op:'add'|'update', id?, kind?, project?, text}]
 // Returns how many were queued (new, not near-duplicates of queued ones).
+// Items the cap or the age-out drops are archived, never deleted.
 export function queueReflections(home, proposals, now = today(), scope = null) {
   const abs = path.join(home, PENDING_REFLECTIONS);
   return withLock(home, () => {
-    const items = readItems(abs).filter((i) => fresh(i.date, now));
+    const all = readItems(abs);
+    archiveItems(home, all.filter((i) => !fresh(i.date, now)));
+    const items = all.filter((i) => fresh(i.date, now));
     let queued = 0;
     for (const p of proposals) {
       const text = String(p.text).replace(/\s+/g, ' ').trim();
@@ -112,7 +155,9 @@ export function queueReflections(home, proposals, now = today(), scope = null) {
       items.push({ line: `- [reflect] ${now} ${head}: ${text}`, date: now, text });
       queued++;
     }
-    writeItems(abs, items.slice(-MAX_ITEMS));
+    const kept = items.slice(-MAX_ITEMS);
+    archiveItems(home, items.slice(0, items.length - kept.length));
+    writeItems(abs, kept);
     return queued;
   });
 }
@@ -123,7 +168,9 @@ export function queueReflections(home, proposals, now = today(), scope = null) {
 export function queueConsolidations(home, scope, texts, now = today()) {
   const abs = path.join(home, PENDING_REFLECTIONS);
   return withLock(home, () => {
-    const items = readItems(abs).filter((i) => fresh(i.date, now));
+    const all = readItems(abs);
+    archiveItems(home, all.filter((i) => !fresh(i.date, now)));
+    const items = all.filter((i) => fresh(i.date, now));
     let queued = 0;
     for (const t of texts) {
       const text = String(t).replace(/\s+/g, ' ').trim();
@@ -136,7 +183,9 @@ export function queueConsolidations(home, scope, texts, now = today()) {
       });
       queued++;
     }
-    writeItems(abs, items.slice(-MAX_ITEMS));
+    const kept = items.slice(-MAX_ITEMS);
+    archiveItems(home, items.slice(0, items.length - kept.length));
+    writeItems(abs, kept);
     return queued;
   });
 }

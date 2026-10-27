@@ -37,7 +37,7 @@ import {
 } from './core.mjs';
 import { DEFAULT_BUDGET, bumpUsage, loadUsage, pickWithinBudget } from './rank.mjs';
 import { ID_RE, entryId, findById, newId, scanIds } from './ids.mjs';
-import { drainReflections, nearDuplicate, pendingReflectionLines, queueConsolidations } from './pending.mjs';
+import { drainReflections, nearDuplicate, archivedReflectionCount, pendingReflectionLines, queueConsolidations } from './pending.mjs';
 import { CONSOLIDATE_AT, budgetFill, consolidationProposals } from './consolidate.mjs';
 
 const out = (s = '') => process.stdout.write(s + '\n');
@@ -482,6 +482,13 @@ export function cmdContext(flags) {
     ...pendingReflectionLines(home, undefined, proj?.slug ?? null),
     ...(fs.existsSync(pending) ? bullets(fs.readFileSync(pending, 'utf8')) : []),
   ].slice(0, 8);
+  // Proposals the queue evicted before review wait in the archive, not in
+  // the void. One pointer line so the next session can rescue them.
+  const archived = archivedReflectionCount(home);
+  if (archived)
+    items.push(
+      `- ${archived} older proposal(s) archived unreviewed in dreams/reflection-archive.md — rescue the real ones with \`amr add\` / \`amr update <id>\`, then delete the line`
+    );
   if (items.length)
     lines.push(
       '',

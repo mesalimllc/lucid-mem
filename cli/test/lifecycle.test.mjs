@@ -136,6 +136,31 @@ test('add past 80% of budget queues consolidation proposals; delete drains them'
   assert.doesNotMatch(pend(), /cc01/);
 });
 
+test('queue overflow archives evicted proposals instead of dropping them', () => {
+  const home = seeded();
+  const queue = path.join(home, 'dreams', 'pending-reflections.md');
+  const old = '- [reflect] 2026-10-20 add pitfall global: oldest queued lesson about zephyr sondes';
+  const fresh = Array.from(
+    { length: 14 },
+    (_, i) => `- [reflect] 2026-10-26 add fact global: filler proposal number ${i} about mistral`
+  );
+  fs.mkdirSync(path.dirname(queue), { recursive: true });
+  fs.writeFileSync(queue, ['# Pending reflections', '', ...[old, ...fresh]].join('\n') + '\n');
+  // One more queued proposal overflows the 15-item cap and evicts `old`.
+  const mem = path.join(home, 'MEMORY.md');
+  fs.writeFileSync(
+    mem,
+    '# Memory\n\n- rotten leftover note [added: 2026-01-01; expires: 2020-01-01; id: cc01]\n\n## Index\n'
+  );
+  const a = run(['add', 'ordinary new note', '--budget', '100'], { amrHome: home });
+  assert.equal(a.status, 0, a.stderr);
+  assert.doesNotMatch(read(queue), /zephyr sondes/);
+  const arch = path.join(home, 'dreams', 'reflection-archive.md');
+  assert.match(read(arch), /zephyr sondes/);
+  // Context points at the archive so the next session can rescue it.
+  assert.match(run(['context'], { amrHome: home }).stdout, /reflection-archive\.md/);
+});
+
 test('dream --fix proposes merges for near-duplicate pairs past the threshold', () => {
   const home = seeded();
   const mem = path.join(home, 'MEMORY.md');
